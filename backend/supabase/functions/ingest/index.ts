@@ -37,6 +37,7 @@ Deno.serve(async (req) => {
   if (!isServiceRoleBypass) {
     // Normal path: validate device-specific API key
     if (!apiKeyHeader) {
+      console.error('Ingest auth failed: Missing X-API-Key header')
       return new Response(
         JSON.stringify({ error: 'Missing X-API-Key header' }),
         { status: 401, headers: { 'Content-Type': 'application/json' } }
@@ -50,6 +51,7 @@ Deno.serve(async (req) => {
       .single()
 
     if (deviceError || !data) {
+      console.error('Ingest auth failed: Device not registered for ID', deviceIdHeader)
       return new Response(
         JSON.stringify({ error: 'Device not registered' }),
         { status: 401, headers: { 'Content-Type': 'application/json' } }
@@ -57,6 +59,7 @@ Deno.serve(async (req) => {
     }
 
     if (!data.is_active) {
+      console.error('Ingest auth failed: Device is inactive for ID', deviceIdHeader)
       return new Response(
         JSON.stringify({ error: 'Device is inactive' }),
         { status: 403, headers: { 'Content-Type': 'application/json' } }
@@ -64,6 +67,7 @@ Deno.serve(async (req) => {
     }
 
     if (data.api_key !== apiKeyHeader) {
+      console.error('Ingest auth failed: Invalid API key for ID', deviceIdHeader)
       return new Response(
         JSON.stringify({ error: 'Invalid API key' }),
         { status: 401, headers: { 'Content-Type': 'application/json' } }

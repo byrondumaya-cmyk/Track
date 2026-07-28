@@ -127,7 +127,7 @@ export default function LiveMap() {
     return () => clearInterval(id)
   }, [lastUpdate])
 
-  const isOnline = device?.status === 'online'
+  const isOnline = Boolean(device?.last_seen && (Date.now() - new Date(device.last_seen).getTime() < 3 * 60 * 1000))
   const batPct = device?.battery_pct ?? 0
   const signalStrength = !device?.rssi_dbm ? '—' : device.rssi_dbm > -70 ? 'Strong' : device.rssi_dbm > -85 ? 'Good' : 'Weak'
 

@@ -411,7 +411,7 @@ export default function DeviceConfig() {
                         <input
                           type={type}
                           placeholder={placeholder}
-                          value={(form as Record<string, string>)[key] ?? ''}
+                          value={((form as any)[key] as string) ?? ''}
                           onChange={e => setAddForm(f => ({
                             ...f, [device.id]: { ...f[device.id], [key]: e.target.value },
                           }))}
