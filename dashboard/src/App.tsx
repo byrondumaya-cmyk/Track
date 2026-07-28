@@ -4,6 +4,7 @@ import LiveMap from './pages/LiveMap'
 import History from './pages/History'
 import Events from './pages/Events'
 import Checkpoints from './pages/Checkpoints'
+import DeviceConfig from './pages/DeviceConfig'
 import Login from './pages/Login'
 import { useEffect, useState } from 'react'
 import { supabase } from './lib/supabase'
@@ -58,6 +59,7 @@ function App() {
           <Route path="history" element={<History />} />
           <Route path="events" element={<Events />} />
           <Route path="checkpoints" element={<Checkpoints />} />
+          <Route path="device-config" element={<DeviceConfig />} />
         </Route>
       </Routes>
     </BrowserRouter>

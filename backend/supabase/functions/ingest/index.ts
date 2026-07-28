@@ -115,6 +115,8 @@ Deno.serve(async (req) => {
     location: record.lat && record.lon
       ? `SRID=4326;POINT(${record.lon} ${record.lat})`
       : undefined,
+    // Track which data path the device used (WiFi=true / LTE=false)
+    wifi_connected: record.wifi_connected === true,
   }))
 
   const { error: insertError } = await supabase

@@ -27,6 +27,14 @@ const CheckpointIcon = () => (
     <circle cx="12" cy="12" r="3"/>
   </svg>
 )
+const DeviceConfigIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M5 12.55a11 11 0 0 1 14.08 0"/>
+    <path d="M1.42 9a16 16 0 0 1 21.16 0"/>
+    <path d="M8.53 16.11a6 6 0 0 1 6.95 0"/>
+    <circle cx="12" cy="20" r="1" fill="currentColor"/>
+  </svg>
+)
 const LogoutIcon = () => (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
     <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
@@ -36,10 +44,11 @@ const LogoutIcon = () => (
 )
 
 const navigation = [
-  { name: 'Live Map',     href: '/',        Icon: MapIcon,     desc: 'Real-time tracking' },
-  { name: 'Route History',href: '/history', Icon: HistoryIcon, desc: 'Daily route replay' },
-  { name: 'Checkpoints',  href: '/checkpoints', Icon: CheckpointIcon, desc: 'Route compliance' },
-  { name: 'Event Log',   href: '/events',  Icon: EventsIcon,  desc: 'System telemetry' },
+  { name: 'Live Map',      href: '/',             Icon: MapIcon,          desc: 'Real-time tracking' },
+  { name: 'Route History', href: '/history',       Icon: HistoryIcon,      desc: 'Daily route replay' },
+  { name: 'Checkpoints',  href: '/checkpoints',   Icon: CheckpointIcon,   desc: 'Route compliance' },
+  { name: 'Event Log',    href: '/events',        Icon: EventsIcon,       desc: 'System telemetry' },
+  { name: 'Device Config',href: '/device-config', Icon: DeviceConfigIcon, desc: 'WiFi & OTA settings' },
 ]
 
 export default function Layout() {
