@@ -7,121 +7,132 @@
 // ║  • Dual upload path: WiFi (preferred) / LTE (fallback)      ║
 // ║  • Cloud-stored WiFi credentials (fetched from Supabase)    ║
 // ║  • Captive-portal WiFi provisioning AP                      ║
-// ║  • ArduinoOTA wireless firmware updates over WiFi           ║
 // ║  • NVS offline flash queue (≈50 min buffering)              ║
 // ║  • FreeRTOS multi-task + hardware watchdog                  ║
 // ╚══════════════════════════════════════════════════════════════╝
 
+#include "secrets.h" // Credentials — NOT committed to git
 #include <Arduino.h>
 #include <ArduinoJson.h>
-#include <TinyGsmClient.h>
-#include <Preferences.h>
-#include <esp_task_wdt.h>
-#include <WiFi.h>
-#include <WiFiClientSecure.h>
-#include <WebServer.h>
 #include <DNSServer.h>
 #include <HTTPClient.h>
-#include "secrets.h"            // Credentials — NOT committed to git
+#include <Preferences.h>
+#include <TinyGsmClient.h>
+#include <WebServer.h>
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <esp_task_wdt.h>
+
+class TinyGsmClientSecure : public TinyGsmClient {
+public:
+  TinyGsmClientSecure(TinyGsm &modem) : TinyGsmClient(modem) {}
+  void setInsecure() {}
+  void setCACert(const char *) {}
+  void setCertificate(const char *) {}
+  void setPrivateKey(const char *) {}
+};
 
 // ─────────────────────────────────────────────────────────────
 // CONFIGURATION
 // ─────────────────────────────────────────────────────────────
-#define LTE_CONNECT_TIMEOUT_MS  60000   // APN connect timeout
-#define WDT_TIMEOUT_S             120   // Watchdog: reset if hung >2 min
-#define UPLOAD_FAIL_REBOOT_LIMIT   10   // Reboot after N consecutive failures
-#define GPS_INTERVAL_MS         15000   // GPS poll interval (moving)
-#define WIFI_CONNECT_TIMEOUT_MS 15000   // Per-SSID connection timeout
-#define WIFI_MAX_NETWORKS          10   // Max stored WiFi networks
+#define LTE_CONNECT_TIMEOUT_MS 60000  // APN connect timeout
+#define WDT_TIMEOUT_S 120             // Watchdog: reset if hung >2 min
+#define UPLOAD_FAIL_REBOOT_LIMIT 10   // Reboot after N consecutive failures
+#define GPS_INTERVAL_MS 15000         // GPS poll interval (moving)
+#define WIFI_CONNECT_TIMEOUT_MS 15000 // Per-SSID connection timeout
+#define WIFI_MAX_NETWORKS 10          // Max stored WiFi networks
 
 // Provisioning AP settings
-#define PROV_AP_SSID    "GarbageTrack-Setup"
-#define PROV_AP_PASS    ""              // Open AP — secured by captive portal
-#define PROV_AP_IP      "192.168.4.1"
-#define PROV_BTN_PIN    0               // BOOT button (GPIO 0) — hold 3s to re-provision
-#define WIFI_HOSTNAME   "garbagetrack-001" // mDNS/DHCP hostname
+#define PROV_AP_SSID "GarbageTrack-Setup"
+#define PROV_AP_PASS "" // Open AP — secured by captive portal
+#define PROV_AP_IP "192.168.4.1"
+#define PROV_BTN_PIN 0 // BOOT button (GPIO 0) — hold 3s to re-provision
+#define WIFI_HOSTNAME "garbagetrack-001" // mDNS/DHCP hostname
 
 // NVS namespaces
-#define FLASH_NS        "gpsq"          // GPS flash queue namespace
-#define WIFI_NS         "wificfg"       // WiFi credential cache namespace
+#define FLASH_NS "gpsq"   // GPS flash queue namespace
+#define WIFI_NS "wificfg" // WiFi credential cache namespace
 #define FLASH_KEY_COUNT "count"
-#define FLASH_MAX_RECORDS 200           // ≈50 min offline buffer
+#define FLASH_MAX_RECORDS 200 // ≈50 min offline buffer
 
 // ─────────────────────────────────────────────────────────────
 // Hardware Pins — LILYGO T-Call A7670E
 // ─────────────────────────────────────────────────────────────
-#define MODEM_TX      27
-#define MODEM_RX      26
-#define MODEM_PWRKEY   4
-#define MODEM_DTR     32
-#define MODEM_RI      33
-#define MODEM_FLIGHT  25
-#define MODEM_STATUS  34
-#define BAT_ADC       35
+#define MODEM_TX 27
+#define MODEM_RX 26
+#define MODEM_PWRKEY 4
+#define MODEM_DTR 32
+#define MODEM_RI 33
+#define MODEM_FLIGHT 25
+#define MODEM_STATUS 34
+#define BAT_ADC 35
+#define LED_PIN 13 // Status indicator
+
 
 // ─────────────────────────────────────────────────────────────
 // Global Objects
 // ─────────────────────────────────────────────────────────────
-HardwareSerial      SerialAT(1);
-TinyGsm             modem(SerialAT);
-TinyGsmClientSecure lteSecureClient(modem);   // LTE data path
+HardwareSerial SerialAT(1);
+TinyGsm modem(SerialAT);
+TinyGsmClientSecure lteSecureClient(modem); // LTE data path
 
-Preferences         prefs;              // GPS flash queue (NVS)
-Preferences         wifiPrefs;          // WiFi credential cache (NVS)
+Preferences prefs;     // GPS flash queue (NVS)
+Preferences wifiPrefs; // WiFi credential cache (NVS)
 
-WebServer           portalServer(80);   // Captive portal HTTP server
-DNSServer           dnsServer;          // DNS redirect for captive portal
+WebServer portalServer(80); // Captive portal HTTP server
+DNSServer dnsServer;        // DNS redirect for captive portal
 
 struct GPSRecord {
   float lat, lon, speed_kmh, heading_deg, accuracy_m;
-  int   satellites, battery_pct;
-  bool  gps_fix;
-  bool  wifi_connected;   // which path uploaded this record
-  int   year, month, day, hour, min, sec;
+  int satellites, battery_pct;
+  bool gps_fix;
+  bool wifi_connected; // which path uploaded this record
+  int year, month, day, hour, min, sec;
 };
 
 // Inter-task state
-QueueHandle_t   gpsQueue;
-volatile bool   wifiConnected    = false;   // WiFi data path available
-volatile int    consecutiveFailures = 0;
+QueueHandle_t gpsQueue;
+volatile bool wifiConnected = false; // WiFi data path available
+volatile int consecutiveFailures = 0;
 
 // ─────────────────────────────────────────────────────────────
 // Function Prototypes
 // ─────────────────────────────────────────────────────────────
-void  TaskGPS(void *pvParameters);
-void  TaskUpload(void *pvParameters);
-void  TaskWiFi(void *pvParameters);		// WiFi connect + monitor (no OTA)
+void TaskGPS(void *pvParameters);
+void TaskUpload(void *pvParameters);
+void TaskWiFi(void *pvParameters); // WiFi connect + monitor (no OTA)
 
-void  modemPowerOn();
-int   readBatteryPercentage();
-bool  ensureLTE();
-void  buildTimestamp(const GPSRecord &r, char *buf, size_t len);
+void modemPowerOn();
+int readBatteryPercentage();
+bool ensureLTE();
+void buildTimestamp(const GPSRecord &r, char *buf, size_t len);
 
 // Upload paths
-bool  uploadViaWiFi(const GPSRecord &r);
-bool  uploadViaLTE(const GPSRecord &r);
-bool  uploadRecord(GPSRecord &r);
+bool uploadViaWiFi(const GPSRecord &r);
+bool uploadViaLTE(const GPSRecord &r);
+bool uploadRecord(GPSRecord &r);
 
 // WiFi provisioning
-bool  tryConnectWiFi();
-void  startProvisioningAP();
-void  postProvisionCredentials(const String &ssid, const String &pass);
+bool tryConnectWiFi();
+void startProvisioningAP();
+void postProvisionCredentials(const String &ssid, const String &pass);
 
 // Device config (cloud WiFi list)
-void  fetchDeviceConfig();
-void  saveWiFiToNVS(const String &ssid, const String &pass);
-int   loadWiFiFromNVS(String ssids[], String passes[], int maxCount);
+void fetchDeviceConfig();
+void saveWiFiToNVS(const String &ssid, const String &pass);
+int loadWiFiFromNVS(String ssids[], String passes[], int maxCount);
 
 // Flash queue (GPS offline buffer)
-void  flashSave(const GPSRecord &r);
-bool  flashLoad(GPSRecord &out);
-void  flashPop();
-int   flashCount();
+void flashSave(const GPSRecord &r);
+bool flashLoad(GPSRecord &out);
+void flashPop();
+int flashCount();
 
 // ─────────────────────────────────────────────────────────────
 // Captive Portal HTML
 // ─────────────────────────────────────────────────────────────
-static const char PORTAL_HTML[] PROGMEM = R"rawhtml(
+static const char PORTAL_HTML[] PROGMEM =
+    R"rawhtml(
 <!DOCTYPE html><html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -156,7 +167,8 @@ static const char PORTAL_HTML[] PROGMEM = R"rawhtml(
     <input type="password" name="password" placeholder="Leave blank for open networks" autocomplete="off">
     <button type="submit">Save &amp; Connect</button>
   </form>
-  <p class="note">Device ID: )rawhtml" DEVICE_ID R"rawhtml( &nbsp;|&nbsp; v)rawhtml" FW_VERSION R"rawhtml(</p>
+  <p class="note">Device ID: )rawhtml" DEVICE_ID
+    R"rawhtml( &nbsp;|&nbsp; v)rawhtml" FW_VERSION R"rawhtml(</p>
 </div>
 </body></html>
 )rawhtml";
@@ -191,11 +203,21 @@ void setup() {
   delay(50);
   Serial.printf("[BOOT] GarbageTrack GPS v%s — Starting\n", FW_VERSION);
 
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+
   // ── Watchdog ──────────────────────────────────────────────
   esp_task_wdt_init(WDT_TIMEOUT_S, true);
   esp_task_wdt_add(NULL);
 
-  // ── Check for provisioning mode (hold BOOT btn at startup) ─
+  // ── NVS ───────────────────────────────────────────────────
+  prefs.begin(FLASH_NS, false);
+  wifiPrefs.begin(WIFI_NS, false);
+
+  String savedSSIDs[WIFI_MAX_NETWORKS], savedPasses[WIFI_MAX_NETWORKS];
+  int storedWiFiCount = loadWiFiFromNVS(savedSSIDs, savedPasses, WIFI_MAX_NETWORKS);
+
+  // ── Check for provisioning mode (hold BOOT btn at startup, or no saved WiFi)
   pinMode(PROV_BTN_PIN, INPUT_PULLUP);
   unsigned long btnStart = millis();
   bool triggerProvisioning = false;
@@ -212,13 +234,15 @@ void setup() {
     delay(100);
   }
 
-  // ── NVS ───────────────────────────────────────────────────
-  prefs.begin(FLASH_NS, false);
-  wifiPrefs.begin(WIFI_NS, false);
+  if (storedWiFiCount == 0) {
+    Serial.println("[BOOT] No saved WiFi credentials — entering provisioning mode");
+    triggerProvisioning = true;
+  }
 
   int savedGps = flashCount();
   if (savedGps > 0) {
-    Serial.printf("[BOOT] Flash queue: %d GPS records from prev session\n", savedGps);
+    Serial.printf("[BOOT] Flash queue: %d GPS records from prev session\n",
+                  savedGps);
   }
 
   // ── FreeRTOS queue ─────────────────────────────────────────
@@ -249,15 +273,27 @@ void setup() {
   // ── FreeRTOS tasks ─────────────────────────────────────────
   // Core 0: WiFi monitor (doesn't compete with GPS/LTE on core 1)
   // Core 1: GPS polling + Upload (time-critical)
-  xTaskCreatePinnedToCore(TaskWiFi,   "WiFi",    4096,  NULL, 1, NULL, 0);
-  xTaskCreatePinnedToCore(TaskGPS,    "GPS",     4096,  NULL, 1, NULL, 1);
-  xTaskCreatePinnedToCore(TaskUpload, "Upload",  10240, NULL, 2, NULL, 1);
+  xTaskCreatePinnedToCore(TaskWiFi, "WiFi", 4096, NULL, 1, NULL, 0);
+  xTaskCreatePinnedToCore(TaskGPS, "GPS", 4096, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(TaskUpload, "Upload", 10240, NULL, 2, NULL, 1);
 
   esp_task_wdt_delete(NULL);
 }
 
-void loop() {
-  vTaskDelay(pdMS_TO_TICKS(1000));
+void loop() { 
+  if (WiFi.getMode() == WIFI_AP_STA || WiFi.getMode() == WIFI_AP) {
+    // Fast blink for AP provisioning
+    digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+    vTaskDelay(pdMS_TO_TICKS(200));
+  } else if (!wifiConnected && !modem.isNetworkConnected()) {
+    // Slow blink connecting
+    digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+    vTaskDelay(pdMS_TO_TICKS(1000));
+  } else {
+    // Solid on when connected
+    digitalWrite(LED_PIN, HIGH);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -265,8 +301,10 @@ void loop() {
 // ─────────────────────────────────────────────────────────────
 void modemPowerOn() {
   pinMode(MODEM_PWRKEY, OUTPUT);
-  digitalWrite(MODEM_PWRKEY, LOW);  delay(100);
-  digitalWrite(MODEM_PWRKEY, HIGH); delay(1000);
+  digitalWrite(MODEM_PWRKEY, LOW);
+  delay(100);
+  digitalWrite(MODEM_PWRKEY, HIGH);
+  delay(1000);
   digitalWrite(MODEM_PWRKEY, LOW);
   Serial.println("[BOOT] Modem power-on complete");
 }
@@ -276,9 +314,9 @@ void modemPowerOn() {
 // T-Call A7670E uses a 2× voltage divider on BAT_ADC (GPIO35)
 // ─────────────────────────────────────────────────────────────
 int readBatteryPercentage() {
-  int   raw  = analogRead(BAT_ADC);
+  int raw = analogRead(BAT_ADC);
   float volt = (raw / 4095.0f) * 3.3f * 2.0f;
-  int   pct  = (int)((volt - 3.2f) / (4.2f - 3.2f) * 100.0f);
+  int pct = (int)((volt - 3.2f) / (4.2f - 3.2f) * 100.0f);
   return constrain(pct, 0, 100);
 }
 
@@ -286,8 +324,8 @@ int readBatteryPercentage() {
 // ISO-8601 UTC Timestamp
 // ─────────────────────────────────────────────────────────────
 void buildTimestamp(const GPSRecord &r, char *buf, size_t len) {
-  snprintf(buf, len, "%04d-%02d-%02dT%02d:%02d:%02dZ",
-           r.year, r.month, r.day, r.hour, r.min, r.sec);
+  snprintf(buf, len, "%04d-%02d-%02dT%02d:%02d:%02dZ", r.year, r.month, r.day,
+           r.hour, r.min, r.sec);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -345,7 +383,8 @@ void saveWiFiToNVS(const String &ssid, const String &pass) {
     wifiPrefs.putString(sk, ssid);
     wifiPrefs.putString(pk, pass);
     wifiPrefs.putInt("count", count + 1);
-    Serial.printf("[WIFI] NVS saved SSID: %s (total: %d)\n", ssid.c_str(), count + 1);
+    Serial.printf("[WIFI] NVS saved SSID: %s (total: %d)\n", ssid.c_str(),
+                  count + 1);
   } else {
     Serial.println("[WIFI] NVS full — overwriting oldest entry");
     // Shift entries down and add new one at the end
@@ -377,7 +416,7 @@ int loadWiFiFromNVS(String ssids[], String passes[], int maxCount) {
     char sk[12], pk[12];
     snprintf(sk, sizeof(sk), "s%d", i);
     snprintf(pk, sizeof(pk), "p%d", i);
-    ssids[i]  = wifiPrefs.getString(sk, "");
+    ssids[i] = wifiPrefs.getString(sk, "");
     passes[i] = wifiPrefs.getString(pk, "");
   }
   return count;
@@ -405,8 +444,8 @@ bool tryConnectWiFi() {
 
   // Build candidate list sorted by RSSI (strongest first)
   // Find which stored SSIDs are visible
-  int  bestIdx = -1;
-  int  bestRSSI = -9999;
+  int bestIdx = -1;
+  int bestRSSI = -9999;
 
   for (int s = 0; s < found; s++) {
     String scannedSSID = WiFi.SSID(s);
@@ -415,7 +454,7 @@ bool tryConnectWiFi() {
         int rssi = WiFi.RSSI(s);
         if (rssi > bestRSSI) {
           bestRSSI = rssi;
-          bestIdx  = k;
+          bestIdx = k;
         }
       }
     }
@@ -427,8 +466,8 @@ bool tryConnectWiFi() {
     return false;
   }
 
-  Serial.printf("[WIFI] Connecting to: %s (RSSI: %d)\n",
-                ssids[bestIdx].c_str(), bestRSSI);
+  Serial.printf("[WIFI] Connecting to: %s (RSSI: %d)\n", ssids[bestIdx].c_str(),
+                bestRSSI);
 
   WiFi.begin(ssids[bestIdx].c_str(), passes[bestIdx].c_str());
 
@@ -459,7 +498,7 @@ void fetchDeviceConfig() {
   delay(3000);
   Serial.println("[CFG] Modem: " + modem.getModemInfo());
 
-  lteSecureClient.setInsecure();  // TODO: add CA cert for production
+  lteSecureClient.setInsecure(); // TODO: add CA cert for production
 
   if (!ensureLTE()) {
     Serial.println("[CFG] LTE unavailable — using cached WiFi list");
@@ -481,12 +520,17 @@ void fetchDeviceConfig() {
   // Read response
   unsigned long deadline = millis() + 10000UL;
   String body;
-  bool   inBody = false;
+  bool inBody = false;
   while (lteSecureClient.connected() && millis() < deadline) {
     if (lteSecureClient.available()) {
       String line = lteSecureClient.readStringUntil('\n');
-      if (line == "\r") { inBody = true; continue; }
-      if (inBody) { body += line; }
+      if (line == "\r") {
+        inBody = true;
+        continue;
+      }
+      if (inBody) {
+        body += line;
+      }
     }
   }
   lteSecureClient.stop();
@@ -529,7 +573,7 @@ void postProvisionCredentials(const String &ssid, const String &pass) {
   }
 
   JsonDocument doc;
-  doc["ssid"]     = ssid;
+  doc["ssid"] = ssid;
   doc["password"] = pass;
   String payload;
   serializeJson(doc, payload);
@@ -575,6 +619,9 @@ void postProvisionCredentials(const String &ssid, const String &pass) {
 void startProvisioningAP() {
   Serial.println("[PROV] Starting provisioning AP: " PROV_AP_SSID);
 
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_AP_STA);
+  delay(100);
   WiFi.softAP(PROV_AP_SSID, PROV_AP_PASS);
   delay(500);
 
@@ -607,18 +654,34 @@ void startProvisioningAP() {
       return;
     }
 
-    // Save locally to NVS first (instant)
-    saveWiFiToNVS(newSSID, newPass);
-    credentialsSaved = true;
+    Serial.printf("[PROV] Testing connection to: %s\n", newSSID.c_str());
+    WiFi.begin(newSSID.c_str(), newPass.c_str());
+    
+    unsigned long timeout = millis() + 15000;
+    while (WiFi.status() != WL_CONNECTED && millis() < timeout) {
+      delay(250);
+      esp_task_wdt_reset();
+    }
 
-    portalServer.send_P(200, "text/html", PORTAL_SUCCESS_HTML);
-    Serial.printf("[PROV] Credentials received for: %s\n", newSSID.c_str());
+    if (WiFi.status() == WL_CONNECTED) {
+      // Save locally to NVS first (instant)
+      saveWiFiToNVS(newSSID, newPass);
+      credentialsSaved = true;
+
+      portalServer.send_P(200, "text/html", PORTAL_SUCCESS_HTML);
+      Serial.printf("[PROV] Connected and credentials saved for: %s\n", newSSID.c_str());
+    } else {
+      WiFi.disconnect();
+      portalServer.send(400, "text/html", "<!DOCTYPE html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><style>body{font-family:system-ui;background:#0d1117;color:#e6edf3;padding:20px;text-align:center;}button{padding:10px 20px;background:#00d4aa;border:none;border-radius:8px;margin-top:20px;cursor:pointer;font-weight:bold}</style></head><body><h2>Failed to connect</h2><p>Please check your password and try again.</p><button onclick=\"history.back()\">Go Back</button></body></html>");
+      Serial.printf("[PROV] Failed to connect to: %s\n", newSSID.c_str());
+    }
   });
 
   portalServer.begin();
-  Serial.println("[PROV] Portal live at http://192.168.4.1 — waiting for credentials");
+  Serial.println(
+      "[PROV] Portal live at http://192.168.4.1 — waiting for credentials");
 
-  unsigned long timeout = millis() + 300000UL;  // 5 min timeout
+  unsigned long timeout = millis() + 300000UL; // 5 min timeout
   while (!credentialsSaved && millis() < timeout) {
     dnsServer.processNextRequest();
     portalServer.handleClient();
@@ -651,18 +714,18 @@ static String buildPayload(const GPSRecord &r) {
   JsonArray arr = doc.to<JsonArray>();
   JsonObject obj = arr.createNestedObject();
 
-  obj["device_id"]     = DEVICE_ID;
-  obj["timestamp"]     = ts;
-  obj["lat"]           = r.lat;
-  obj["lon"]           = r.lon;
-  obj["speed_kmh"]     = r.speed_kmh;
-  obj["heading_deg"]   = r.heading_deg;
+  obj["device_id"] = DEVICE_ID;
+  obj["timestamp"] = ts;
+  obj["lat"] = r.lat;
+  obj["lon"] = r.lon;
+  obj["speed_kmh"] = r.speed_kmh;
+  obj["heading_deg"] = r.heading_deg;
   // Note: A7670E GNSS does not expose true HDOP/COG; accuracy_m is the
   // satellite accuracy estimate in meters returned by getGPS().
-  obj["hdop"]          = r.accuracy_m;
-  obj["satellites"]    = r.satellites;
-  obj["battery_pct"]   = r.battery_pct;
-  obj["gps_fix"]       = r.gps_fix;
+  obj["hdop"] = r.accuracy_m;
+  obj["satellites"] = r.satellites;
+  obj["battery_pct"] = r.battery_pct;
+  obj["gps_fix"] = r.gps_fix;
   obj["wifi_connected"] = r.wifi_connected;
 
   String payload;
@@ -674,20 +737,21 @@ static String buildPayload(const GPSRecord &r) {
 // Upload via WiFi path (WiFiClientSecure + HTTPClient)
 // ─────────────────────────────────────────────────────────────
 bool uploadViaWiFi(GPSRecord &r) {
-  if (WiFi.status() != WL_CONNECTED) return false;
+  if (WiFi.status() != WL_CONNECTED)
+    return false;
 
   r.wifi_connected = true;
   String payload = buildPayload(r);
 
   WiFiClientSecure wifiClient;
-  wifiClient.setInsecure();  // TODO: CA cert for production
+  wifiClient.setInsecure(); // TODO: CA cert for production
 
   HTTPClient http;
   String url = String("https://") + SUPABASE_HOST + "/functions/v1/ingest";
   http.begin(wifiClient, url);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-Device-ID", DEVICE_ID);
-  http.addHeader("X-API-Key",   DEVICE_API_KEY);
+  http.addHeader("X-API-Key", DEVICE_API_KEY);
 
   int code = http.POST(payload);
   http.end();
@@ -740,7 +804,8 @@ bool uploadViaLTE(GPSRecord &r) {
 bool uploadRecord(GPSRecord &r) {
   if (wifiConnected) {
     bool ok = uploadViaWiFi(r);
-    if (ok) return true;
+    if (ok)
+      return true;
     Serial.println("[UPLOAD] WiFi upload failed — falling back to LTE");
   }
   return uploadViaLTE(r);
@@ -750,29 +815,28 @@ bool uploadRecord(GPSRecord &r) {
 // Flash Queue — NVS-backed persistent ring buffer
 // Keys: "r000"…"r199" (record slots), "head", "count"
 // ─────────────────────────────────────────────────────────────
-int flashCount() {
-  return prefs.getInt(FLASH_KEY_COUNT, 0);
-}
+int flashCount() { return prefs.getInt(FLASH_KEY_COUNT, 0); }
 
 void flashSave(const GPSRecord &r) {
   int count = prefs.getInt(FLASH_KEY_COUNT, 0);
-  int head  = prefs.getInt("head", 0);
+  int head = prefs.getInt("head", 0);
 
   if (count >= FLASH_MAX_RECORDS) {
-    head  = (head + 1) % FLASH_MAX_RECORDS;
+    head = (head + 1) % FLASH_MAX_RECORDS;
     prefs.putInt("head", head);
     count = FLASH_MAX_RECORDS - 1;
   }
 
-  int  slot = (head + count) % FLASH_MAX_RECORDS;
-  char key[8]; snprintf(key, sizeof(key), "r%03d", slot);
+  int slot = (head + count) % FLASH_MAX_RECORDS;
+  char key[8];
+  snprintf(key, sizeof(key), "r%03d", slot);
 
   char buf[256];
   snprintf(buf, sizeof(buf),
            "{\"la\":%.6f,\"lo\":%.6f,\"sp\":%.1f,\"bp\":%d,\"fx\":%d,"
            "\"yr\":%d,\"mo\":%d,\"dy\":%d,\"hr\":%d,\"mn\":%d,\"sc\":%d}",
-           r.lat, r.lon, r.speed_kmh, r.battery_pct, r.gps_fix ? 1 : 0,
-           r.year, r.month, r.day, r.hour, r.min, r.sec);
+           r.lat, r.lon, r.speed_kmh, r.battery_pct, r.gps_fix ? 1 : 0, r.year,
+           r.month, r.day, r.hour, r.min, r.sec);
 
   prefs.putString(key, buf);
   prefs.putInt(FLASH_KEY_COUNT, count + 1);
@@ -781,35 +845,41 @@ void flashSave(const GPSRecord &r) {
 
 bool flashLoad(GPSRecord &out) {
   int count = prefs.getInt(FLASH_KEY_COUNT, 0);
-  if (count == 0) return false;
+  if (count == 0)
+    return false;
 
-  int  head = prefs.getInt("head", 0);
-  char key[8]; snprintf(key, sizeof(key), "r%03d", head);
+  int head = prefs.getInt("head", 0);
+  char key[8];
+  snprintf(key, sizeof(key), "r%03d", head);
   String raw = prefs.getString(key, "");
-  if (raw.isEmpty()) return false;
+  if (raw.isEmpty())
+    return false;
 
   JsonDocument doc;
-  if (deserializeJson(doc, raw) != DeserializationError::Ok) return false;
+  if (deserializeJson(doc, raw) != DeserializationError::Ok)
+    return false;
 
-  out.lat         = doc["la"] | 0.0f;
-  out.lon         = doc["lo"] | 0.0f;
-  out.speed_kmh   = doc["sp"] | 0.0f;
+  out.lat = doc["la"] | 0.0f;
+  out.lon = doc["lo"] | 0.0f;
+  out.speed_kmh = doc["sp"] | 0.0f;
   out.battery_pct = doc["bp"] | 0;
-  out.gps_fix     = (doc["fx"] | 0) == 1;
-  out.year        = doc["yr"] | 2026;
-  out.month       = doc["mo"] | 1;
-  out.day         = doc["dy"] | 1;
-  out.hour        = doc["hr"] | 0;
-  out.min         = doc["mn"] | 0;
-  out.sec         = doc["sc"] | 0;
+  out.gps_fix = (doc["fx"] | 0) == 1;
+  out.year = doc["yr"] | 2026;
+  out.month = doc["mo"] | 1;
+  out.day = doc["dy"] | 1;
+  out.hour = doc["hr"] | 0;
+  out.min = doc["mn"] | 0;
+  out.sec = doc["sc"] | 0;
   return true;
 }
 
 void flashPop() {
   int count = prefs.getInt(FLASH_KEY_COUNT, 0);
-  if (count == 0) return;
-  int  head = prefs.getInt("head", 0);
-  char key[8]; snprintf(key, sizeof(key), "r%03d", head);
+  if (count == 0)
+    return;
+  int head = prefs.getInt("head", 0);
+  char key[8];
+  snprintf(key, sizeof(key), "r%03d", head);
   prefs.remove(key);
   prefs.putInt("head", (head + 1) % FLASH_MAX_RECORDS);
   prefs.putInt(FLASH_KEY_COUNT, count - 1);
@@ -825,7 +895,7 @@ void flashPop() {
 void TaskGPS(void *pvParameters) {
   esp_task_wdt_add(NULL);
 
-  vTaskDelay(pdMS_TO_TICKS(8000));   // Let modem fully initialize first
+  vTaskDelay(pdMS_TO_TICKS(8000)); // Let modem fully initialize first
   Serial.println("[GPS] Enabling integrated GNSS...");
   modem.enableGPS();
   vTaskDelay(pdMS_TO_TICKS(2000));
@@ -838,29 +908,29 @@ void TaskGPS(void *pvParameters) {
 
     if ((xTaskGetTickCount() - lastPoll) >= pollInterval) {
       GPSRecord rec = {};
-      float lat=0, lon=0, speed=0, alt=0, acc=0;
-      int   vsat=0, usat=0;
+      float lat = 0, lon = 0, speed = 0, alt = 0, acc = 0;
+      int vsat = 0, usat = 0;
 
-      bool fix = modem.getGPS(&lat, &lon, &speed, &alt,
-                               &vsat, &usat, &acc,
-                               &rec.year, &rec.month, &rec.day,
-                               &rec.hour, &rec.min, &rec.sec);
+      bool fix =
+          modem.getGPS(&lat, &lon, &speed, &alt, &vsat, &usat, &acc, &rec.year,
+                       &rec.month, &rec.day, &rec.hour, &rec.min, &rec.sec);
 
-      rec.lat         = lat;
-      rec.lon         = lon;
-      rec.speed_kmh   = speed;
+      rec.lat = lat;
+      rec.lon = lon;
+      rec.speed_kmh = speed;
       // A7670E basic GNSS API does not provide heading/COG
       rec.heading_deg = 0;
       // acc = satellite accuracy estimate in meters (NOT true HDOP)
-      rec.accuracy_m  = acc;
-      rec.satellites  = usat;
+      rec.accuracy_m = acc;
+      rec.satellites = usat;
       rec.battery_pct = readBatteryPercentage();
-      rec.gps_fix     = fix && (lat != 0.0f) && (lon != 0.0f);
+      rec.gps_fix = fix && (lat != 0.0f) && (lon != 0.0f);
       // wifi_connected is set at upload time by uploadRecord()
 
       if (rec.gps_fix) {
-        Serial.printf("[GPS] Fix: %.6f, %.6f | %.1f km/h | bat:%d%% | sats:%d\n",
-                      lat, lon, speed, rec.battery_pct, usat);
+        Serial.printf(
+            "[GPS] Fix: %.6f, %.6f | %.1f km/h | bat:%d%% | sats:%d\n", lat,
+            lon, speed, rec.battery_pct, usat);
       } else {
         Serial.printf("[GPS] No fix (visible:%d used:%d)\n", vsat, usat);
       }
@@ -888,7 +958,7 @@ void TaskUpload(void *pvParameters) {
   // Just ensure it stays connected
   lteSecureClient.setInsecure();
 
-  int backoffMs   = 5000;
+  int backoffMs = 5000;
   const int maxMs = 120000;
 
   for (;;) {
@@ -905,10 +975,11 @@ void TaskUpload(void *pvParameters) {
 
     // ── Drain flash records first (offline buffer) ────────────
     GPSRecord rec;
-    bool      uploaded = false;
+    bool uploaded = false;
     while (flashCount() > 0) {
       esp_task_wdt_reset();
-      if (!flashLoad(rec)) break;
+      if (!flashLoad(rec))
+        break;
 
       Serial.printf("[UPLOAD] Flash record (%d remaining) via %s...\n",
                     flashCount(), wifiConnected ? "WiFi" : "LTE");
@@ -919,7 +990,8 @@ void TaskUpload(void *pvParameters) {
         uploaded = true;
       } else {
         consecutiveFailures++;
-        Serial.printf("[UPLOAD] Flash upload failed (%d)\n", consecutiveFailures);
+        Serial.printf("[UPLOAD] Flash upload failed (%d)\n",
+                      consecutiveFailures);
         if (consecutiveFailures >= UPLOAD_FAIL_REBOOT_LIMIT) {
           Serial.println("[UPLOAD] Too many failures — rebooting");
           esp_restart();
@@ -930,7 +1002,8 @@ void TaskUpload(void *pvParameters) {
     }
 
     // ── Then drain live RAM queue ─────────────────────────────
-    if (xQueueReceive(gpsQueue, &rec, pdMS_TO_TICKS(uploaded ? 100 : 5000)) == pdPASS) {
+    if (xQueueReceive(gpsQueue, &rec, pdMS_TO_TICKS(uploaded ? 100 : 5000)) ==
+        pdPASS) {
       Serial.printf("[UPLOAD] Live record via %s...\n",
                     wifiConnected ? "WiFi" : "LTE");
       if (uploadRecord(rec)) {
@@ -964,8 +1037,8 @@ void TaskWiFi(void *pvParameters) {
     Serial.println("[WIFI] No WiFi available — running LTE-only mode");
   }
 
-  unsigned long lastReconnect  = 0;
-  const unsigned long INTERVAL = 60000;  // retry every 60 s
+  unsigned long lastReconnect = 0;
+  const unsigned long INTERVAL = 60000; // retry every 60 s
 
   for (;;) {
     esp_task_wdt_reset();
@@ -974,8 +1047,8 @@ void TaskWiFi(void *pvParameters) {
       if (WiFi.status() != WL_CONNECTED) {
         Serial.println("[WIFI] Connection lost — will retry");
         WiFi.disconnect(true);
-        wifiConnected    = false;
-        lastReconnect    = millis();  // start reconnect timer now
+        wifiConnected = false;
+        lastReconnect = millis(); // start reconnect timer now
       }
     } else {
       if (millis() - lastReconnect > INTERVAL) {
@@ -988,4 +1061,3 @@ void TaskWiFi(void *pvParameters) {
     vTaskDelay(pdMS_TO_TICKS(1000));
   }
 }
-
