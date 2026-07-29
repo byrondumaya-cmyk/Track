@@ -1,4 +1,5 @@
-.pio/build/esp32dev/src/main.cpp.o: src/main.cpp src/secrets.h \
+.pio/build/esp32dev/src/main.cpp.o: src/main.cpp src/config.h \
+ src/secrets.h src/system_state.h \
  C:/Users/Byron\ Dumaya/.platformio/packages/framework-arduinoespressif32/cores/esp32/Arduino.h \
  C:/Users/Byron\ Dumaya/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp_arduino_version.h \
  C:/Users/Byron\ Dumaya/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/freertos/include/freertos/FreeRTOS.h \
