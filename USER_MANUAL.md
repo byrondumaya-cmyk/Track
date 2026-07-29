@@ -16,12 +16,6 @@ The GarbageTrack hardware (LILYGO T-Call A7670E) is designed to be installed on 
 Once connected to the battery/solar system, the device turns on automatically. 
 There are no physical buttons to press.
 
-### The Status LED
-The device uses a status LED to communicate its current state:
-- **Fast Blinking:** Booting up or attempting to connect to a network.
-- **Solid On:** Successfully connected to the backend and actively uploading GPS data.
-- **Slow Blinking:** Offline mode; saving GPS data to local flash memory.
-
 ---
 
 ## 3. Local Maintenance Portal
