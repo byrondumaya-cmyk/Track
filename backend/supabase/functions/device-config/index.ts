@@ -33,7 +33,7 @@ Deno.serve(async (req) => {
   // Validate device
   const { data, error } = await supabase
     .from('devices')
-    .select('id, api_key, is_active, name, wifi_networks')
+    .select('id, api_key, is_active, name, wifi_networks, apn')
     .eq('device_id', deviceIdHeader)
     .single()
 
@@ -58,7 +58,8 @@ Deno.serve(async (req) => {
   return json({
     wifi_networks:      wifiNetworks,
     device_name:        data.name,
-    fw_version_latest:  '1.1.0',   // bump this to trigger OTA notification
+    apn:                data.apn,
+    fw_version_latest:  '1.3.0',   // bumped version for TrackerLocator
     config_fetched_at:  new Date().toISOString(),
   }, 200)
 })

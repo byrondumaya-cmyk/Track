@@ -16,6 +16,9 @@ interface Device {
   name: string
   is_active: boolean
   wifi_networks: WiFiNetwork[]
+  apn: string | null
+  sim_number: string | null
+  sim_carrier: string | null
 }
 
 interface DeviceStatus {
@@ -90,6 +93,8 @@ export default function DeviceConfig() {
   const [saving, setSaving]             = useState<string | null>(null)  // deviceId being saved
   const [deleting, setDeleting]         = useState<string | null>(null)
   const [showPassFor, setShowPassFor]   = useState<Record<string, boolean>>({})
+  const [simForm, setSimForm]           = useState<Record<string, { apn: string; sim_number: string; sim_carrier: string; open: boolean }>>({}) 
+  const [savingSim, setSavingSim]       = useState<string | null>(null)
 
   // Add-network form state per device
   const [addForm, setAddForm] = useState<Record<string, { ssid: string; password: string; open: boolean }>>({})
@@ -116,7 +121,7 @@ export default function DeviceConfig() {
   const fetchDevices = async () => {
     const { data } = await supabase
       .from('devices')
-      .select('id, device_id, name, is_active, wifi_networks')
+      .select('id, device_id, name, is_active, wifi_networks, apn, sim_number, sim_carrier')
       .order('name')
     if (data) setDevices(data as Device[])
   }
@@ -136,6 +141,42 @@ export default function DeviceConfig() {
   }
   const closeAddForm = (deviceId: string) => {
     setAddForm(f => ({ ...f, [deviceId]: { ...(f[deviceId] || {}), open: false, ssid: '', password: '' } }))
+  }
+
+  const openSimForm = (device: Device) => {
+    setSimForm(f => ({
+      ...f,
+      [device.id]: {
+        apn: device.apn ?? 'internet',
+        sim_number: device.sim_number ?? '',
+        sim_carrier: device.sim_carrier ?? 'Smart PH',
+        open: true,
+      },
+    }))
+  }
+  const closeSimForm = (deviceId: string) => {
+    setSimForm(f => ({ ...f, [deviceId]: { ...(f[deviceId] || {}), open: false } }))
+  }
+
+  const handleSaveSim = async (device: Device) => {
+    const form = simForm[device.id]
+    if (!form) return
+    setSavingSim(device.id)
+    const { error } = await supabase
+      .from('devices')
+      .update({
+        apn: form.apn.trim() || 'internet',
+        sim_number: form.sim_number.trim() || null,
+        sim_carrier: form.sim_carrier.trim() || null,
+      })
+      .eq('id', device.id)
+    if (!error) {
+      closeSimForm(device.id)
+      await fetchDevices()
+    } else {
+      console.error('Failed to save SIM config:', error)
+    }
+    setSavingSim(null)
   }
 
   const handleAddNetwork = async (device: Device) => {
@@ -208,8 +249,8 @@ export default function DeviceConfig() {
           Device Configuration
         </h1>
         <p style={{ color: 'var(--text-muted)', fontSize: '12px', margin: 0 }}>
-          Manage cloud-stored WiFi credentials and monitor connection paths per device.
-          The ESP32 fetches these on every boot via LTE and auto-connects to the strongest known network.
+          Manage cloud-stored WiFi credentials, SIM/APN config, and monitor connection paths per device.
+          The tracker fetches these on every boot via LTE and auto-connects to the strongest known network.
         </p>
       </div>
 
@@ -291,6 +332,137 @@ export default function DeviceConfig() {
                 </div>
               </div>
 
+              {/* ── SIM / APN section ── */}
+              {(() => {
+                const sf = simForm[device.id]
+                const isSavingSim = savingSim === device.id
+                const simCarriers = ['Smart PH', 'Globe PH', 'DITO PH', 'Other']
+                const apnDefaults: Record<string, string> = {
+                  'Smart PH': 'internet', 'Globe PH': 'internet.globe.com.ph',
+                  'DITO PH': 'internet', 'Other': 'internet',
+                }
+                return (
+                  <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)' }}>
+                    <div style={{
+                      color: 'var(--text-muted)', fontSize: '10px', fontWeight: 600,
+                      letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: '10px',
+                    }}>
+                      SIM / APN Configuration
+                    </div>
+
+                    {sf?.open ? (
+                      <div className="anim-fade-up" style={{
+                        background: 'var(--bg-card)', borderRadius: '8px',
+                        border: '1px solid rgba(59,130,246,0.25)', padding: '14px',
+                      }}>
+                        <div style={{
+                          color: '#60a5fa', fontSize: '10px', fontWeight: 700,
+                          letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: '10px',
+                        }}>Edit SIM / APN</div>
+                        {/* Carrier selector */}
+                        <div style={{ marginBottom: '8px' }}>
+                          <label style={{ color: 'var(--text-muted)', fontSize: '10px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', display: 'block', marginBottom: '4px' }}>Carrier</label>
+                          <select
+                            value={sf.sim_carrier}
+                            onChange={e => {
+                              const carrier = e.target.value
+                              setSimForm(f => ({
+                                ...f, [device.id]: {
+                                  ...f[device.id],
+                                  sim_carrier: carrier,
+                                  apn: apnDefaults[carrier] ?? 'internet',
+                                },
+                              }))
+                            }}
+                            style={{
+                              width: '100%', padding: '7px 10px', boxSizing: 'border-box',
+                              background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                              borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px',
+                              outline: 'none', fontFamily: "'Inter', sans-serif",
+                            }}
+                          >
+                            {simCarriers.map(c => <option key={c} value={c}>{c}</option>)}
+                          </select>
+                        </div>
+                        {/* SIM Number */}
+                        {[
+                          { label: 'SIM Number', key: 'sim_number', type: 'text', placeholder: 'e.g. 09613556081' },
+                          { label: 'APN', key: 'apn', type: 'text', placeholder: 'e.g. internet' },
+                        ].map(({ label, key, type, placeholder }) => (
+                          <div key={key} style={{ marginBottom: '8px' }}>
+                            <label style={{ color: 'var(--text-muted)', fontSize: '10px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', display: 'block', marginBottom: '4px' }}>{label}</label>
+                            <input
+                              type={type}
+                              placeholder={placeholder}
+                              value={(sf as any)[key] ?? ''}
+                              onChange={e => setSimForm(f => ({ ...f, [device.id]: { ...f[device.id], [key]: e.target.value } }))}
+                              style={{
+                                width: '100%', padding: '7px 10px', boxSizing: 'border-box',
+                                background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                                borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px',
+                                outline: 'none', fontFamily: "'JetBrains Mono', monospace",
+                              }}
+                            />
+                          </div>
+                        ))}
+                        <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
+                          <button
+                            onClick={() => handleSaveSim(device)}
+                            disabled={isSavingSim}
+                            style={{
+                              flex: 1, padding: '8px', borderRadius: '6px',
+                              background: isSavingSim ? 'rgba(59,130,246,0.3)' : 'linear-gradient(135deg,#3b82f6,#2563eb)',
+                              border: 'none', color: '#fff', fontWeight: 700, fontSize: '12px',
+                              cursor: isSavingSim ? 'not-allowed' : 'pointer',
+                            }}
+                          >
+                            {isSavingSim ? 'Saving...' : 'Save SIM Config'}
+                          </button>
+                          <button
+                            onClick={() => closeSimForm(device.id)}
+                            style={{
+                              padding: '8px 12px', borderRadius: '6px',
+                              border: '1px solid var(--border)', background: 'transparent',
+                              color: 'var(--text-secondary)', fontSize: '12px', cursor: 'pointer',
+                            }}
+                          >Cancel</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{
+                        display: 'flex', alignItems: 'center', gap: '10px',
+                        padding: '10px 12px', borderRadius: '8px',
+                        background: 'var(--bg-card)', border: '1px solid var(--border)',
+                      }}>
+                        <LteIcon />
+                        <div style={{ flex: 1 }}>
+                          <div style={{ color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600 }}>
+                            {device.sim_carrier ?? 'Smart PH'}
+                            {device.sim_number && (
+                              <span style={{
+                                marginLeft: '8px', fontSize: '11px', fontWeight: 500,
+                                color: 'var(--text-muted)', fontFamily: "'JetBrains Mono', monospace",
+                              }}>{device.sim_number}</span>
+                            )}
+                          </div>
+                          <div style={{ color: 'var(--text-muted)', fontSize: '11px', marginTop: '2px', fontFamily: "'JetBrains Mono', monospace" }}>
+                            APN: {device.apn ?? 'internet'}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => openSimForm(device)}
+                          style={{
+                            padding: '4px 10px', borderRadius: '6px',
+                            border: '1px solid rgba(59,130,246,0.25)', background: 'transparent',
+                            color: '#60a5fa', fontSize: '11px', fontWeight: 600, cursor: 'pointer',
+                          }}
+                        >Edit</button>
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
+
               {/* WiFi networks section */}
               <div style={{ padding: '16px 20px' }}>
                 <div style={{
@@ -299,6 +471,7 @@ export default function DeviceConfig() {
                 }}>
                   Saved WiFi Networks ({networks.length})
                 </div>
+
 
                 {networks.length === 0 ? (
                   <div style={{
@@ -479,7 +652,7 @@ export default function DeviceConfig() {
                     <div style={{ color: 'var(--text-muted)', fontSize: '11px', lineHeight: '1.5' }}>
                       Hold the <strong style={{ color: 'var(--text-secondary)' }}>BOOT button for 3 seconds</strong> at power-on to start the{' '}
                       <code style={{ fontFamily: "'JetBrains Mono', monospace", color: 'var(--accent)', background: 'rgba(0,212,170,0.08)', padding: '1px 5px', borderRadius: '3px' }}>
-                        GarbageTrack-Setup
+                        TrackLocator-Setup
                       </code>{' '}
                       AP. Connect your phone, open a browser, and enter WiFi credentials — they will sync here automatically.
                     </div>

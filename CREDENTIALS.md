@@ -10,7 +10,7 @@ This document outlines the standard credentials for accessing the GarbageTrack h
 ## 1. Local Hardware Access Point (AP)
 When the device is powered on, it permanently broadcasts a Wi-Fi Access Point for technicians to connect and perform local diagnostics.
 
-- **Network Name (SSID):** `GarbageTrack-Service`
+- **Network Name (SSID):** `TrackLocator-Service`
 - **Wi-Fi Password (WPA2):** `GTrack2026`
 
 ## 2. Local Maintenance Portal (Captive Portal)
@@ -20,7 +20,10 @@ Once connected to the hardware's Wi-Fi network, navigate to the local portal to 
 - **Username:** `admin`
 - **Password:** `GTrack@2026!`
 
-## 3. Web-Hosted Dashboard
+## 3. SIM / Connectivity Credentials
+- **Device 1 (SIM):** `09613556081` (Smart PH)
+
+## 4. Web-Hosted Dashboard
 The global tracking application where administrators can monitor the entire fleet of garbage trucks in real time.
 
 - **Production URL:** [https://garbage-truck-gps-z59i-2wpo36hdb-dumjaes-projects.vercel.app/](https://garbage-truck-gps-z59i-2wpo36hdb-dumjaes-projects.vercel.app/)

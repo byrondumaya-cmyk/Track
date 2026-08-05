@@ -108,7 +108,7 @@ export default function Layout() {
               </svg>
             </div>
             <div>
-              <div style={{ color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700, letterSpacing: '-0.01em' }}>GarbageTrack</div>
+              <div style={{ color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700, letterSpacing: '-0.01em' }}>TrackLocator</div>
               <div style={{ color: 'var(--text-muted)', fontSize: '10px', letterSpacing: '0.05em' }}>COMMAND CENTER</div>
             </div>
           </div>
@@ -192,7 +192,7 @@ export default function Layout() {
               }} className={isOnline ? "anim-blink" : ""} />
             </div>
             <span style={{ color: isOnline ? 'var(--text-secondary)' : '#ef4444', fontSize: '12px' }}>
-              {isOnline ? 'Truck is Online' : 'Truck is Offline'}
+              {isOnline ? 'Tracker Online' : 'Tracker Offline'}
             </span>
           </div>
         </div>

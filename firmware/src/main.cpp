@@ -47,6 +47,9 @@ TinyGsmClientSecure lteSecureClient(modem);
 
 Preferences prefs;     // GPS flash queue (NVS)
 Preferences wifiPrefs; // WiFi credential cache (NVS)
+Preferences apnPrefs;  // Dynamic APN configuration (NVS)
+
+String g_apn = DEFAULT_APN; // Runtime APN (overridden by NVS or portal)
 
 WebServer diagServer(80); // Persistent diagnostics/portal server
 DNSServer dnsServer;      // DNS redirect (captive portal probe catcher)
@@ -59,6 +62,7 @@ volatile bool g_wifiConnected = false;
 volatile int g_consecutiveFailures = 0;
 volatile uint32_t g_lastUploadMs = 0;
 volatile uint32_t g_lastGpsFixMs = 0;
+volatile uint32_t g_lastFlashMs  = 0; // For 30s offline-only flash cadence
 
 // Rolling in-memory event log
 static String g_log[LOG_MAX_ENTRIES];
@@ -196,7 +200,7 @@ String buildStatusJSON();
 static const char HTML_LOGIN[] PROGMEM = R"rawhtml(
 <!DOCTYPE html><html lang="en"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>GarbageTrack — Login</title>
+<title>TrackLocator — Login</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,sans-serif;background:#0d1117;color:#e6edf3;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px}
@@ -210,7 +214,7 @@ button{width:100%;padding:10px;background:linear-gradient(135deg,#00d4aa,#00a87c
 .err{color:#f85149;font-size:12px;margin-bottom:12px;padding:8px 10px;background:#ff000015;border-radius:6px;border:1px solid #f8514930}
 </style></head><body>
 <div class="card">
-  <h1>🛰 GarbageTrack Service Portal</h1>
+  <h1>🛰 TrackLocator Service Portal</h1>
   <p class="sub">Administrator access required</p>
   %ERROR%
   <form method="POST" action="/login">
@@ -228,7 +232,7 @@ button{width:100%;padding:10px;background:linear-gradient(135deg,#00d4aa,#00a87c
 static const char HTML_DASHBOARD[] PROGMEM = R"rawhtml(
 <!DOCTYPE html><html lang="en"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>GarbageTrack — Diagnostics</title>
+<title>TrackLocator — Diagnostics</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,sans-serif;background:#0d1117;color:#e6edf3;padding:16px;font-size:13px}
@@ -255,7 +259,7 @@ h1{color:#00d4aa;font-size:16px;margin-bottom:16px}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 </style></head><body>
 <div class="status-bar"><span class="dot" id="dot"></span><span id="ts">Loading...</span></div>
-<h1>🛰 GarbageTrack Diagnostics</h1>
+<h1>🛰 TrackLocator Diagnostics</h1>
 <div class="grid" id="grid">Loading device status...</div>
 <div class="actions">
   <button class="btn btn-setup" onclick="location.href='/setup'">⚙ Configure Wi-Fi</button>
@@ -328,7 +332,7 @@ refresh();setInterval(refresh,3000);
 static const char HTML_SETUP[] PROGMEM = R"rawhtml(
 <!DOCTYPE html><html lang="en"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>GarbageTrack — Wi-Fi Setup</title>
+<title>TrackLocator — Wi-Fi Setup</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,sans-serif;background:#0d1117;color:#e6edf3;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px}
@@ -356,6 +360,8 @@ button{width:100%;padding:10px;background:linear-gradient(135deg,#00d4aa,#00a87c
     <input type="text" id="ssid" name="ssid" placeholder="e.g. MyHomeWiFi" required autocomplete="off">
     <label>Password</label>
     <input type="password" id="pass" name="password" placeholder="Leave blank for open networks" autocomplete="off">
+    <label>Cellular APN (Optional)</label>
+    <input type="text" id="apn" name="apn" placeholder="e.g. internet (Leave blank to keep current)" autocomplete="off">
     <button type="submit" id="submitBtn">Connect & Verify</button>
   </form>
   <div id="status">
@@ -399,7 +405,7 @@ document.getElementById('form').addEventListener('submit',async e=>{
   document.getElementById('submitBtn').disabled=true;
   document.getElementById('form').style.display='block';
   document.getElementById('status').style.display='block';
-  const body=new URLSearchParams({ssid:document.getElementById('ssid').value,password:document.getElementById('pass').value});
+  const body=new URLSearchParams({ssid:document.getElementById('ssid').value,password:document.getElementById('pass').value,apn:document.getElementById('apn').value});
   await fetch('/setup',{method:'POST',body});
   setStage('s1','<span class="spin">↻</span>','');
   polling=setInterval(poll,1200);
@@ -450,8 +456,8 @@ bool ensureLTE() {
     }
   }
   if (!modem.isGprsConnected()) {
-    logEvent("LTE: Connecting GPRS...");
-    if (!modem.gprsConnect(APN, "", "")) {
+    logEvent("LTE: Connecting GPRS (APN: %s)...", g_apn.c_str());
+    if (!modem.gprsConnect(g_apn.c_str(), "", "")) {
       logEvent("LTE: GPRS connect failed");
       return false;
     }
@@ -641,6 +647,14 @@ void fetchDeviceConfig() {
     }
   }
   logEvent("CFG: Merged %d WiFi networks from cloud", merged);
+
+  // Load APN from cloud config if provided
+  const char* cloudApn = doc["apn"] | "";
+  if (cloudApn && strlen(cloudApn) > 0) {
+    g_apn = String(cloudApn);
+    apnPrefs.putString("apn", g_apn);
+    logEvent("CFG: APN updated from cloud: %s", g_apn.c_str());
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -951,6 +965,13 @@ void handleSetupPost() {
 
   String newSSID = diagServer.arg("ssid");
   String newPass = diagServer.arg("password");
+  String newAPN  = diagServer.arg("apn");
+
+  if (newAPN.length() > 0) {
+    g_apn = newAPN;
+    apnPrefs.putString("apn", g_apn);
+    logEvent("Prov: APN updated to %s", g_apn.c_str());
+  }
 
   if (newSSID.length() == 0) {
     diagServer.send(400, "application/json", "{\"error\":\"SSID required\"}");
@@ -1311,8 +1332,19 @@ void TaskGPS(void *pvParameters) {
       }
 
       if (xQueueSend(gpsQueue, &rec, 0) != pdPASS) {
-        logEvent("GPS: RAM queue full — saving to flash");
-        flashSave(rec);
+        // Live queue full — save to flash only if 30s offline interval elapsed
+        if (millis() - g_lastFlashMs >= FLASH_INTERVAL_MS) {
+          logEvent("GPS: RAM queue full — saving to flash (30s interval)");
+          flashSave(rec);
+          g_lastFlashMs = millis();
+        }
+      } else if (!g_wifiConnected && !g_health.lte_registered) {
+        // Fully offline: save to flash at 30s cadence even if queue has room
+        if (millis() - g_lastFlashMs >= FLASH_INTERVAL_MS) {
+          flashSave(rec);
+          g_lastFlashMs = millis();
+          logEvent("GPS: Offline flash save (30s) — %d buffered", flashCount());
+        }
       }
       lastPoll = xTaskGetTickCount();
     }
@@ -1451,7 +1483,7 @@ void setup() {
   g_logMutex = xSemaphoreCreateMutex();
   g_healthMutex = xSemaphoreCreateMutex();
 
-  logEvent("GarbageTrack GPS v%s — Starting", FW_VERSION);
+  logEvent("TrackLocator GPS v%s — Starting", FW_VERSION);
 
   // Watchdog
   esp_task_wdt_init(WDT_TIMEOUT_S, true);
@@ -1460,6 +1492,17 @@ void setup() {
   // NVS
   prefs.begin(FLASH_NS, false);
   wifiPrefs.begin(WIFI_NS, false);
+  apnPrefs.begin(APN_NS, false);
+
+  // Load dynamic APN from NVS (overrides compile-time DEFAULT_APN)
+  String savedApn = apnPrefs.getString("apn", "");
+  if (savedApn.length() > 0) {
+    g_apn = savedApn;
+    logEvent("APN: Loaded from NVS: %s", g_apn.c_str());
+  } else {
+    g_apn = DEFAULT_APN; // fallback to config.h default
+    logEvent("APN: Using default: %s", g_apn.c_str());
+  }
 
   int savedGps = flashCount();
   if (savedGps > 0)

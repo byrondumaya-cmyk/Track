@@ -8,13 +8,14 @@
 // ─────────────────────────────────────────────────────────────
 // Firmware Version
 // ─────────────────────────────────────────────────────────────
-#define FW_VERSION "1.2.0"
+#define FW_VERSION "1.3.0"
 
 // ─────────────────────────────────────────────────────────────
 // Timing & Limits
 // ─────────────────────────────────────────────────────────────
 #define WDT_TIMEOUT_S 120     // Hardware watchdog reset threshold (seconds)
-#define GPS_INTERVAL_MS 15000 // GPS poll interval while moving
+#define GPS_INTERVAL_MS 15000 // GPS poll interval (live tracking)
+#define FLASH_INTERVAL_MS 30000 // Offline-only flash-write interval (saves NVS)
 #define WIFI_CONNECT_TIMEOUT_MS 15000 // Per-SSID connection attempt timeout
 #define LTE_CONNECT_TIMEOUT_MS 60000  // APN connect timeout
 #define UPLOAD_FAIL_REBOOT_LIMIT                                               \
@@ -28,8 +29,9 @@
 #define FLASH_NS "gpsq"   // NVS namespace: GPS offline queue
 #define WIFI_NS "wificfg" // NVS namespace: WiFi credential cache
 #define DIAG_NS "diagcfg" // NVS namespace: Diagnostics portal config
+#define APN_NS  "apncfg"  // NVS namespace: Dynamic APN configuration
 #define FLASH_KEY_COUNT "count"
-#define FLASH_MAX_RECORDS 200 // ~50 min offline buffer at 15s intervals
+#define FLASH_MAX_RECORDS 200 // ~100 min offline buffer at 30s intervals
 #define WIFI_MAX_NETWORKS 10  // Max stored WiFi networks
 
 // ─────────────────────────────────────────────────────────────
@@ -52,7 +54,7 @@
 // Future: load overrides from NVS (DIAG_NS namespace) at boot
 // so the password can be changed via the portal without reflashing.
 // ─────────────────────────────────────────────────────────────
-#define DIAG_AP_SSID "GarbageTrack-Service"
+#define DIAG_AP_SSID "TrackLocator-Service"
 #define DIAG_AP_PASS "GTrack2026" // WPA2 — change via portal or reflash
 #define DIAG_AP_CHANNEL 1
 #define DIAG_AP_MAX_CON 3 // Max simultaneous technician connections
@@ -80,5 +82,13 @@
 // ─────────────────────────────────────────────────────────────
 // Misc
 // ─────────────────────────────────────────────────────────────
-#define WIFI_HOSTNAME "garbagetrack-001" // mDNS/DHCP hostname
+#define WIFI_HOSTNAME "tracklocator-001" // mDNS/DHCP hostname
 #define LOG_MAX_ENTRIES 25               // Rolling in-memory event log size
+
+// ─────────────────────────────────────────────────────────────
+// Cellular / LTE — APN defaults per carrier
+// Runtime APN is loaded from NVS (APN_NS) at boot.
+// If no NVS value exists, DEFAULT_APN is used.
+// ─────────────────────────────────────────────────────────────
+#define DEFAULT_APN "internet" // Smart PH / DITO PH default
+                               // Globe PH: "internet.globe.com.ph"

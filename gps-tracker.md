@@ -1,7 +1,7 @@
 # GPS Tracker System — Implementation Plan
 
 ## Goal
-Build a solar-powered, fully autonomous GPS tracking system for a Garbage Truck prototype using LILYGO T-Call A7670 (ESP32), Supabase backend, and a Vite+React dashboard with Leaflet maps.
+Build a solar-powered, fully autonomous GPS tracking system for a Tracker prototype using LILYGO T-Call A7670 (ESP32), Supabase backend, and a Vite+React dashboard with Leaflet maps.
 
 ---
 
@@ -144,8 +144,8 @@ Build a solar-powered, fully autonomous GPS tracking system for a Garbage Truck 
 
 ## Notes
 
-- **Device ID:** `GBT-001` (Garbage Truck 001)
-- **APN:** Depends on SIM provider (Globe: `internet`, Smart: `internet`)
+- **Device ID:** `TL-001` (TrackLocator 001)
+- **APN:** Depends on SIM provider (Smart PH: `internet`, Globe: `internet.globe.com.ph`)
 - **Supabase project pauses after 1 week inactivity** — set up a keepalive cron (GitHub Actions or Vercel cron) that pings the health endpoint every 3 days
 - **GPS:** If A7670 built-in GPS is unreliable indoors, add external u-blox M8N on UART2
 - **OTA updates:** Phase 2 feature — implement after field test is stable

@@ -147,7 +147,7 @@ export default function LiveMap() {
               Live Tracking
             </h2>
             <p style={{ color: 'var(--text-muted)', fontSize: '11px', margin: '3px 0 0' }}>
-              {lastUpdate ? `Last update: ${elapsed}` : 'Waiting for device...'}
+              {lastUpdate ? `Last update: ${elapsed}` : 'Waiting for tracker...'}
             </p>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -230,7 +230,7 @@ export default function LiveMap() {
               <Marker position={[device.last_lat, device.last_lon]} icon={truckIcon}>
                 <Popup>
                   <div style={{ fontFamily: "'Inter', sans-serif", minWidth: '180px', background: 'var(--bg-card)', margin: '-14px -20px', padding: '14px 16px' }}>
-                    <div style={{ color: 'var(--text-primary)', fontWeight: 700, fontSize: '13px', marginBottom: '8px' }}>Truck TRUCK-001</div>
+                    <div style={{ color: 'var(--text-primary)', fontWeight: 700, fontSize: '13px', marginBottom: '8px' }}>Tracker {device.device_id}</div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       {[
                         ['Speed', `${device.last_speed?.toFixed(1)} km/h`],
@@ -266,7 +266,7 @@ export default function LiveMap() {
               border: '2px solid var(--border)',
               borderTopColor: 'var(--accent)', borderRadius: '50%',
             }} />
-            <div style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>Waiting for truck to connect...</div>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>Waiting for tracker to connect...</div>
           </div>
         )}
       </div>
