@@ -33,7 +33,7 @@ Deno.serve(async (req) => {
   // Validate device
   const { data, error } = await supabase
     .from('devices')
-    .select('id, api_key, is_active, name, wifi_networks, apn')
+    .select('id, api_key, is_active, name, wifi_networks, apn, track_history_enabled, track_events_enabled')
     .eq('device_id', deviceIdHeader)
     .single()
 
@@ -59,6 +59,8 @@ Deno.serve(async (req) => {
     wifi_networks:      wifiNetworks,
     device_name:        data.name,
     apn:                data.apn,
+    track_history_enabled: data.track_history_enabled !== false,
+    track_events_enabled:  data.track_events_enabled !== false,
     fw_version_latest:  '1.3.0',   // bumped version for TrackerLocator
     config_fetched_at:  new Date().toISOString(),
   }, 200)

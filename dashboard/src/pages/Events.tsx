@@ -2,10 +2,17 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 
 interface SystemEvent {
-  id: string
+  id: string | number
+  device_id: string
   event_type: string
   payload: Record<string, unknown>
   timestamp: string
+}
+
+interface DeviceControl {
+  id: string
+  name: string
+  track_events_enabled: boolean
 }
 
 const EVENT_META: Record<string, { color: string; bg: string; label: string }> = {
@@ -16,6 +23,7 @@ const EVENT_META: Record<string, { color: string; bg: string; label: string }> =
   battery_low:       { color: '#f59e0b', bg: 'rgba(245,158,11,0.08)',  label: 'Bat. Low' },
   upload_fail:       { color: '#ef4444', bg: 'rgba(239,68,68,0.08)',   label: 'Upload Fail' },
   upload_success:    { color: '#00d4aa', bg: 'rgba(0,212,170,0.08)',   label: 'Uploaded' },
+  checkpoint_visit:  { color: '#22c55e', bg: 'rgba(34,197,94,0.08)',   label: 'Checkpoint' },
 }
 const DEFAULT_META = { color: '#64748b', bg: 'rgba(100,116,139,0.08)', label: 'Event' }
 
@@ -45,17 +53,35 @@ function EventIcon({ type }: { type: string }) {
 
 export default function Events() {
   const [events, setEvents] = useState<SystemEvent[]>([])
+  const [devices, setDevices] = useState<DeviceControl[]>([])
+  const [selectedDeviceId, setSelectedDeviceId] = useState('all')
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('all')
+  const [deleting, setDeleting] = useState(false)
+  const [changingTracking, setChangingTracking] = useState(false)
 
   useEffect(() => {
     const fetch = async () => {
-      const { data } = await supabase
+      const [{ data: eventData }, { data: deviceData }] = await Promise.all([
+        supabase
         .from('system_events')
         .select('*')
         .order('timestamp', { ascending: false })
-        .limit(100)
-      if (data) setEvents(data as SystemEvent[])
+        .limit(100),
+        supabase
+          .from('devices')
+          .select('id, name, track_events_enabled')
+          .order('name', { ascending: true }),
+      ])
+
+      if (eventData) setEvents(eventData as SystemEvent[])
+      if (deviceData) {
+        const nextDevices = deviceData as DeviceControl[]
+        setDevices(nextDevices)
+        if (nextDevices.length > 0) {
+          setSelectedDeviceId((prev) => (prev === 'all' ? nextDevices[0].id : prev))
+        }
+      }
       setLoading(false)
     }
     fetch()
@@ -69,8 +95,83 @@ export default function Events() {
     return () => { supabase.removeChannel(ch) }
   }, [])
 
-  const types = ['all', ...Array.from(new Set(events.map(e => e.event_type)))]
-  const filtered = filter === 'all' ? events : events.filter(e => e.event_type === filter)
+  const activeDevice = devices.find((d) => d.id === selectedDeviceId) ?? null
+
+  const filteredByDevice = selectedDeviceId === 'all'
+    ? events
+    : events.filter((e) => e.device_id === selectedDeviceId)
+  const types = ['all', ...Array.from(new Set(filteredByDevice.map(e => e.event_type)))]
+  const filtered = filter === 'all'
+    ? filteredByDevice
+    : filteredByDevice.filter((e) => e.event_type === filter)
+
+  const handleToggleTracking = async () => {
+    if (!activeDevice || changingTracking) return
+
+    const nextValue = !activeDevice.track_events_enabled
+    const actionWord = nextValue ? 'continue' : 'stop'
+    if (!confirm(`Do you want to ${actionWord} event logging for ${activeDevice.name}?`)) return
+
+    setChangingTracking(true)
+    const { error } = await supabase
+      .from('devices')
+      .update({ track_events_enabled: nextValue })
+      .eq('id', activeDevice.id)
+
+    if (error) {
+      alert(`Failed to update event tracking status: ${error.message}`)
+      setChangingTracking(false)
+      return
+    }
+
+    setDevices((prev) => prev.map((d) => (
+      d.id === activeDevice.id ? { ...d, track_events_enabled: nextValue } : d
+    )))
+    setChangingTracking(false)
+  }
+
+  const handleDeleteAll = async () => {
+    const scope = filter === 'all' ? 'all logs' : `all ${filter} logs`
+    if (!confirm(`Delete ${scope}? This cannot be undone.`)) return
+
+    setDeleting(true)
+    try {
+      let q = supabase.from('system_events').delete()
+      if (selectedDeviceId !== 'all') {
+        q = q.eq('device_id', selectedDeviceId)
+      }
+
+      const { error } = filter === 'all'
+        ? await q.not('id', 'is', null)
+        : await q.eq('event_type', filter)
+
+      if (error) {
+        console.error('Delete logs failed:', error)
+        alert(`Delete failed: ${error.message}`)
+        return
+      }
+
+      setEvents(prev => prev.filter((e) => {
+        const matchesDevice = selectedDeviceId === 'all' || e.device_id === selectedDeviceId
+        const matchesType = filter === 'all' || e.event_type === filter
+        return !(matchesDevice && matchesType)
+      }))
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  const handleDeleteOne = async (id: string | number) => {
+    if (!confirm('Delete this log entry?')) return
+
+    const { error } = await supabase.from('system_events').delete().eq('id', id)
+    if (error) {
+      console.error('Delete log entry failed:', error)
+      alert(`Delete failed: ${error.message}`)
+      return
+    }
+    setEvents(prev => prev.filter(e => e.id !== id))
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg-base)' }}>
@@ -80,7 +181,7 @@ export default function Events() {
         padding: '16px 24px', background: 'var(--bg-surface)',
         borderBottom: '1px solid var(--border)', flexShrink: 0,
       }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', gap: '10px' }}>
           <div>
             <h2 style={{ color: 'var(--text-primary)', fontSize: '16px', fontWeight: 700, margin: 0, letterSpacing: '-0.01em' }}>
               Event Log
@@ -89,7 +190,62 @@ export default function Events() {
               {filtered.length} events · Real-time stream
             </p>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <label style={{ color: 'var(--text-muted)', fontSize: '11px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+              Device
+            </label>
+            <select
+              value={selectedDeviceId}
+              onChange={(e) => setSelectedDeviceId(e.target.value)}
+              style={{
+                padding: '5px 10px',
+                background: 'var(--bg-card)', border: '1px solid var(--border)',
+                borderRadius: '6px', color: 'var(--text-primary)',
+                fontSize: '11px', outline: 'none', cursor: 'pointer',
+                fontFamily: "'Inter', sans-serif",
+              }}
+            >
+              <option value="all">All Devices</option>
+              {devices.map((d) => (
+                <option key={d.id} value={d.id}>{d.name}</option>
+              ))}
+            </select>
+            <button
+              onClick={handleToggleTracking}
+              disabled={!activeDevice || changingTracking}
+              style={{
+                padding: '5px 10px',
+                borderRadius: '6px',
+                border: `1px solid ${activeDevice?.track_events_enabled ? 'rgba(239,68,68,0.25)' : 'rgba(0,212,170,0.28)'}`,
+                background: 'transparent',
+                color: activeDevice?.track_events_enabled ? '#ef4444' : '#00d4aa',
+                fontSize: '10px',
+                fontWeight: 700,
+                letterSpacing: '0.08em',
+                cursor: !activeDevice || changingTracking ? 'not-allowed' : 'pointer',
+                opacity: !activeDevice || changingTracking ? 0.6 : 1,
+              }}
+            >
+              {changingTracking ? 'UPDATING...' : (activeDevice?.track_events_enabled ? 'STOP EVENTS' : 'CONTINUE EVENTS')}
+            </button>
+            <button
+              onClick={handleDeleteAll}
+              disabled={deleting || filtered.length === 0}
+              style={{
+                padding: '5px 10px',
+                borderRadius: '6px',
+                border: '1px solid rgba(239,68,68,0.25)',
+                background: deleting ? 'rgba(239,68,68,0.08)' : 'transparent',
+                color: '#ef4444',
+                fontSize: '10px',
+                fontWeight: 700,
+                letterSpacing: '0.08em',
+                cursor: deleting || filtered.length === 0 ? 'not-allowed' : 'pointer',
+                opacity: deleting || filtered.length === 0 ? 0.6 : 1,
+              }}
+            >
+              {deleting ? 'DELETING...' : (filter === 'all' ? 'DELETE ALL' : `DELETE ${filter.toUpperCase()}`)}
+            </button>
             <div className="anim-blink" style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#ef4444', boxShadow: '0 0 6px #ef4444' }} />
             <span style={{ color: '#ef4444', fontSize: '10px', fontWeight: 700, letterSpacing: '0.12em' }}>LIVE</span>
           </div>
@@ -172,9 +328,26 @@ export default function Events() {
                     <span style={{ color: meta.color, fontSize: '12px', fontWeight: 700, letterSpacing: '0.04em' }}>
                       {meta.label}
                     </span>
-                    <span style={{ color: 'var(--text-muted)', fontSize: '10px', flexShrink: 0, fontFamily: "'JetBrains Mono', monospace" }}>
-                      {timeSince(event.timestamp)}
-                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                      <span style={{ color: 'var(--text-muted)', fontSize: '10px', fontFamily: "'JetBrains Mono', monospace" }}>
+                        {timeSince(event.timestamp)}
+                      </span>
+                      <button
+                        onClick={() => handleDeleteOne(event.id)}
+                        style={{
+                          padding: '2px 6px',
+                          borderRadius: '4px',
+                          border: '1px solid rgba(239,68,68,0.22)',
+                          background: 'transparent',
+                          color: '#ef4444',
+                          fontSize: '9px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Del
+                      </button>
+                    </div>
                   </div>
                   {event.payload && Object.keys(event.payload).length > 0 && (
                     <div style={{

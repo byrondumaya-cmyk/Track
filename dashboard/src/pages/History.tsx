@@ -29,6 +29,13 @@ interface CheckpointCompliance {
   closest_m: number
 }
 
+interface DeviceControl {
+  id: string
+  device_id: string
+  name: string
+  track_history_enabled: boolean
+}
+
 function calcDistance(records: GpsRecord[]): number {
   if (records.length < 2) return 0
   return records.reduce((acc, r, i) => {
@@ -47,8 +54,31 @@ export default function History() {
   const [route, setRoute] = useState<GpsRecord[]>([])
   const [compliance, setCompliance] = useState<CheckpointCompliance[]>([])
   const [totalCheckpoints, setTotalCheckpoints] = useState(0)
+  const [devices, setDevices] = useState<DeviceControl[]>([])
+  const [selectedDeviceId, setSelectedDeviceId] = useState('all')
+  const [changingTracking, setChangingTracking] = useState(false)
+  const [deletingHistory, setDeletingHistory] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
   const [loading, setLoading] = useState(false)
   const defaultCenter: [number, number] = [15.4912, 120.8321]
+
+  useEffect(() => {
+    const fetchDevices = async () => {
+      const { data } = await supabase
+        .from('devices')
+        .select('id, device_id, name, track_history_enabled')
+        .order('name', { ascending: true })
+
+      if (!data) return
+      const nextDevices = data as DeviceControl[]
+      setDevices(nextDevices)
+
+      if (selectedDeviceId === 'all' && nextDevices.length > 0) {
+        setSelectedDeviceId(nextDevices[0].id)
+      }
+    }
+    fetchDevices()
+  }, [])
 
   useEffect(() => {
     const fetchRoute = async () => {
@@ -57,19 +87,31 @@ export default function History() {
       const end = new Date(date); end.setHours(23, 59, 59, 999)
 
       // Fetch GPS Route
-      const { data: routeData } = await supabase.from('gps_records')
+      let routeQuery = supabase.from('gps_records')
         .select('id, lat, lon, speed_kmh, battery_pct, timestamp')
         .gte('timestamp', start.toISOString())
         .lte('timestamp', end.toISOString())
         .order('timestamp', { ascending: true })
+
+      if (selectedDeviceId !== 'all') {
+        routeQuery = routeQuery.eq('device_id', selectedDeviceId)
+      }
+
+      const { data: routeData } = await routeQuery
       
       if (routeData) setRoute(routeData as GpsRecord[])
 
       // Fetch Checkpoint Compliance
-      const { data: compData } = await supabase.from('daily_checkpoint_compliance')
+      let complianceQuery = supabase.from('daily_checkpoint_compliance')
         .select('*')
         .eq('date_ph', date)
         .order('route_order', { ascending: true })
+
+      if (selectedDeviceId !== 'all') {
+        complianceQuery = complianceQuery.eq('device_id', selectedDeviceId)
+      }
+
+      const { data: compData } = await complianceQuery
       
       if (compData) setCompliance(compData as CheckpointCompliance[])
 
@@ -83,7 +125,83 @@ export default function History() {
       setLoading(false)
     }
     fetchRoute()
-  }, [date])
+  }, [date, selectedDeviceId, reloadKey])
+
+  const activeDevice = devices.find((d) => d.id === selectedDeviceId) ?? null
+
+  const handleToggleTracking = async () => {
+    if (!activeDevice || changingTracking) return
+
+    const nextValue = !activeDevice.track_history_enabled
+    const actionWord = nextValue ? 'continue' : 'stop'
+    if (!confirm(`Do you want to ${actionWord} route history tracking for ${activeDevice.name}?`)) return
+
+    setChangingTracking(true)
+    const { error } = await supabase
+      .from('devices')
+      .update({ track_history_enabled: nextValue })
+      .eq('id', activeDevice.id)
+
+    if (error) {
+      alert(`Failed to update tracking status: ${error.message}`)
+      setChangingTracking(false)
+      return
+    }
+
+    setDevices((prev) => prev.map((d) => (
+      d.id === activeDevice.id ? { ...d, track_history_enabled: nextValue } : d
+    )))
+    setChangingTracking(false)
+  }
+
+  const handleDeleteHistory = async (scope: 'day' | 'all') => {
+    if (!activeDevice || deletingHistory) return
+
+    const start = new Date(date); start.setHours(0, 0, 0, 0)
+    const end = new Date(date); end.setHours(23, 59, 59, 999)
+    const target = scope === 'day' ? `history for ${date}` : 'all history'
+
+    if (!confirm(`Delete ${target} for ${activeDevice.name}? This cannot be undone.`)) return
+
+    setDeletingHistory(true)
+
+    let visitsDelete = supabase
+      .from('checkpoint_visits')
+      .delete()
+      .eq('device_id', activeDevice.id)
+
+    let gpsDelete = supabase
+      .from('gps_records')
+      .delete()
+      .eq('device_id', activeDevice.id)
+
+    if (scope === 'day') {
+      visitsDelete = visitsDelete
+        .gte('visited_at', start.toISOString())
+        .lte('visited_at', end.toISOString())
+
+      gpsDelete = gpsDelete
+        .gte('timestamp', start.toISOString())
+        .lte('timestamp', end.toISOString())
+    }
+
+    const { error: visitsErr } = await visitsDelete
+    if (visitsErr) {
+      alert(`Failed to delete checkpoint visits: ${visitsErr.message}`)
+      setDeletingHistory(false)
+      return
+    }
+
+    const { error: gpsErr } = await gpsDelete
+    if (gpsErr) {
+      alert(`Failed to delete route history: ${gpsErr.message}`)
+      setDeletingHistory(false)
+      return
+    }
+
+    setReloadKey((k) => k + 1)
+    setDeletingHistory(false)
+  }
 
   const positions: [number, number][] = route.map(r => [r.lat, r.lon])
   const distance = calcDistance(route)
@@ -135,7 +253,79 @@ export default function History() {
               {route.length > 0 ? `${route.length} points recorded` : 'Select a date to load route'}
             </p>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <label style={{ color: 'var(--text-muted)', fontSize: '11px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+              Device
+            </label>
+            <select
+              value={selectedDeviceId}
+              onChange={(e) => setSelectedDeviceId(e.target.value)}
+              style={{
+                padding: '7px 10px',
+                background: 'var(--bg-card)', border: '1px solid var(--border)',
+                borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)',
+                fontSize: '12px', outline: 'none', cursor: 'pointer',
+                fontFamily: "'Inter', sans-serif",
+              }}
+            >
+              {devices.map((d) => (
+                <option key={d.id} value={d.id}>{d.name}</option>
+              ))}
+            </select>
+            <button
+              onClick={handleToggleTracking}
+              disabled={!activeDevice || changingTracking}
+              style={{
+                padding: '7px 11px',
+                borderRadius: '6px',
+                border: `1px solid ${activeDevice?.track_history_enabled ? 'rgba(239,68,68,0.25)' : 'rgba(0,212,170,0.28)'}`,
+                background: 'transparent',
+                color: activeDevice?.track_history_enabled ? '#ef4444' : '#00d4aa',
+                fontSize: '10px',
+                fontWeight: 700,
+                letterSpacing: '0.06em',
+                cursor: !activeDevice || changingTracking ? 'not-allowed' : 'pointer',
+                opacity: !activeDevice || changingTracking ? 0.6 : 1,
+              }}
+            >
+              {changingTracking ? 'UPDATING...' : (activeDevice?.track_history_enabled ? 'STOP TRACKING' : 'CONTINUE TRACKING')}
+            </button>
+            <button
+              onClick={() => handleDeleteHistory('day')}
+              disabled={!activeDevice || deletingHistory}
+              style={{
+                padding: '7px 11px',
+                borderRadius: '6px',
+                border: '1px solid rgba(245,158,11,0.3)',
+                background: 'transparent',
+                color: '#f59e0b',
+                fontSize: '10px',
+                fontWeight: 700,
+                letterSpacing: '0.06em',
+                cursor: !activeDevice || deletingHistory ? 'not-allowed' : 'pointer',
+                opacity: !activeDevice || deletingHistory ? 0.6 : 1,
+              }}
+            >
+              {deletingHistory ? 'DELETING...' : 'DELETE DAY'}
+            </button>
+            <button
+              onClick={() => handleDeleteHistory('all')}
+              disabled={!activeDevice || deletingHistory}
+              style={{
+                padding: '7px 11px',
+                borderRadius: '6px',
+                border: '1px solid rgba(239,68,68,0.25)',
+                background: 'transparent',
+                color: '#ef4444',
+                fontSize: '10px',
+                fontWeight: 700,
+                letterSpacing: '0.06em',
+                cursor: !activeDevice || deletingHistory ? 'not-allowed' : 'pointer',
+                opacity: !activeDevice || deletingHistory ? 0.6 : 1,
+              }}
+            >
+              {deletingHistory ? 'DELETING...' : 'DELETE ALL'}
+            </button>
             <label style={{ color: 'var(--text-muted)', fontSize: '11px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
               Date
             </label>

@@ -32,7 +32,13 @@ Deno.serve(async (req) => {
     : null
   const isServiceRoleBypass = bearerToken === supabaseServiceKey
 
-  let device: { id: string; api_key: string; is_active: boolean } | null = null
+  let device: {
+    id: string
+    api_key: string
+    is_active: boolean
+    track_history_enabled: boolean
+    track_events_enabled: boolean
+  } | null = null
 
   if (!isServiceRoleBypass) {
     // Normal path: validate device-specific API key
@@ -46,7 +52,7 @@ Deno.serve(async (req) => {
 
     const { data, error: deviceError } = await supabase
       .from('devices')
-      .select('id, api_key, is_active')
+      .select('id, api_key, is_active, track_history_enabled, track_events_enabled')
       .eq('device_id', deviceIdHeader)
       .single()
 
@@ -79,7 +85,7 @@ Deno.serve(async (req) => {
     // Service-role bypass: just look up the device UUID
     const { data } = await supabase
       .from('devices')
-      .select('id, api_key, is_active')
+      .select('id, api_key, is_active, track_history_enabled, track_events_enabled')
       .eq('device_id', deviceIdHeader)
       .single()
     device = data
@@ -123,22 +129,65 @@ Deno.serve(async (req) => {
     wifi_connected: record.wifi_connected === true,
   }))
 
-  const { error: insertError } = await supabase
-    .from('gps_records')
-    .insert(formattedRecords)
+  const shouldTrackHistory = device!.track_history_enabled !== false
+  const shouldTrackEvents = device!.track_events_enabled !== false
+
+  let insertError: { message: string } | null = null
+  if (shouldTrackHistory) {
+    const insertResult = await supabase
+      .from('gps_records')
+      .insert(formattedRecords)
+    insertError = insertResult.error
+  }
 
   if (insertError) {
     console.error('Insert error:', insertError)
+    // Best-effort event log for observability; do not mask the primary error.
+    if (shouldTrackEvents) {
+      await supabase.from('system_events').insert({
+        device_id: device!.id,
+        event_type: 'upload_fail',
+        payload: {
+          attempted: formattedRecords.length,
+          detail: insertError.message,
+        },
+      })
+    }
+
     return new Response(
       JSON.stringify({ error: 'Failed to insert records', detail: insertError.message }),
       { status: 500, headers: { 'Content-Type': 'application/json' } }
     )
   }
 
+  // Emit one event per successful upload batch.
+  const acceptedCount = shouldTrackHistory ? formattedRecords.length : 0
+
+  if (shouldTrackEvents) {
+    const gpsFixCount = formattedRecords.filter((r) => r.gps_fix === true).length
+    const wifiCount = formattedRecords.filter((r) => r.wifi_connected === true).length
+    const latest = formattedRecords[formattedRecords.length - 1] ?? null
+
+    await supabase.from('system_events').insert({
+      device_id: device!.id,
+      event_type: 'upload_success',
+      payload: {
+        accepted: acceptedCount,
+        gps_fix_count: gpsFixCount,
+        wifi_count: wifiCount,
+        lte_count: formattedRecords.length - wifiCount,
+        latest_record: latest,
+        history_recording: shouldTrackHistory,
+      },
+    })
+  }
+
   return new Response(
     JSON.stringify({
       status: 'ok',
-      accepted: formattedRecords.length,
+      accepted: acceptedCount,
+      history_recording: shouldTrackHistory,
+      event_recording: shouldTrackEvents,
       server_time: new Date().toISOString(),
     }),
     { headers: { 'Content-Type': 'application/json' }, status: 200 }
