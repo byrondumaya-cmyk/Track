@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 
 const SignalIcon = () => (
@@ -12,6 +12,17 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  const [isMobile, setIsMobile] = useState(false)
+
+  useEffect(() => {
+    const updateViewport = () => {
+      setIsMobile(window.innerWidth <= 980)
+    }
+
+    updateViewport()
+    window.addEventListener('resize', updateViewport)
+    return () => { window.removeEventListener('resize', updateViewport) }
+  }, [])
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -27,10 +38,12 @@ export default function Login() {
 
   return (
     <div style={{
-      minHeight: '100vh', display: 'flex',
+      minHeight: '100dvh', display: 'flex',
+      flexDirection: isMobile ? 'column' : 'row',
       background: 'var(--bg-base)',
       fontFamily: "'Inter', sans-serif",
-      overflow: 'hidden',
+      overflowX: 'hidden',
+      overflowY: 'auto',
       position: 'relative',
     }}>
       {/* Animated background mesh */}
@@ -54,13 +67,17 @@ export default function Login() {
       <div
         className="anim-fade-in"
         style={{
-          flex: 1, display: 'flex', flexDirection: 'column',
+          flex: isMobile ? '0 0 auto' : 1,
+          display: 'flex', flexDirection: 'column',
           justifyContent: 'center', padding: '64px',
           position: 'relative', zIndex: 1,
+          paddingBottom: isMobile ? '14px' : '64px',
+          paddingTop: isMobile ? '34px' : '64px',
+          paddingInline: isMobile ? '22px' : '64px',
         }}
       >
         {/* Logo mark */}
-        <div className="anim-float" style={{ marginBottom: '48px' }}>
+        <div className="anim-float" style={{ marginBottom: isMobile ? '24px' : '48px' }}>
           <div style={{
             width: '56px', height: '56px',
             background: 'linear-gradient(135deg, #00d4aa, #00a87c)',
@@ -74,7 +91,7 @@ export default function Login() {
           <div style={{ color: 'var(--accent)', fontSize: '11px', letterSpacing: '0.2em', fontWeight: 600, textTransform: 'uppercase', marginBottom: '10px' }}>
             Fleet Intelligence Platform
           </div>
-          <h1 style={{ color: 'var(--text-primary)', fontSize: '40px', fontWeight: 800, lineHeight: 1.15, margin: 0, letterSpacing: '-0.02em' }}>
+          <h1 style={{ color: 'var(--text-primary)', fontSize: isMobile ? '30px' : '40px', fontWeight: 800, lineHeight: 1.15, margin: 0, letterSpacing: '-0.02em' }}>
             GarbageTrack<br />
             <span style={{ color: 'var(--accent)' }}>Command</span>
           </h1>
@@ -86,7 +103,7 @@ export default function Login() {
         {/* Feature list */}
         <div className="anim-fade-up delay-2" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
           {[
-            { label: 'Live GPS Tracking', desc: 'Sub-15s position updates via LTE' },
+            { label: 'Live GPS Tracking', desc: '30s position updates via LTE' },
             { label: 'Route History', desc: 'Full daily route replay with analytics' },
             { label: 'System Events', desc: 'Real-time telemetry & alert log' },
           ].map(({ label, desc }) => (
@@ -106,19 +123,21 @@ export default function Login() {
       </div>
 
       {/* Divider */}
+      {!isMobile && (
       <div style={{
         width: '1px',
         background: 'linear-gradient(to bottom, transparent, var(--border), transparent)',
         flexShrink: 0, zIndex: 1,
       }} />
+      )}
 
       {/* Right panel — form */}
       <div style={{
-        width: '480px', flexShrink: 0,
+        width: isMobile ? '100%' : '480px', flexShrink: 0,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: '48px', zIndex: 1,
+        padding: isMobile ? '18px 22px 28px' : '48px', zIndex: 1,
       }}>
-        <div className="anim-slide-left" style={{ width: '100%' }}>
+        <div className="anim-slide-left" style={{ width: '100%', maxWidth: isMobile ? '520px' : 'none' }}>
           <div style={{ marginBottom: '36px' }}>
             <h2 style={{ color: 'var(--text-primary)', fontSize: '22px', fontWeight: 700, margin: '0 0 6px', letterSpacing: '-0.01em' }}>
               Authorized Access
