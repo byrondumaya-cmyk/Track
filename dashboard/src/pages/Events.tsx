@@ -29,6 +29,20 @@ const DEFAULT_META = { color: '#64748b', bg: 'rgba(100,116,139,0.08)', label: 'E
 
 function getMeta(type: string) { return EVENT_META[type] ?? DEFAULT_META }
 
+function dayBounds(dateStr: string) {
+  const start = new Date(dateStr)
+  start.setHours(0, 0, 0, 0)
+  const end = new Date(dateStr)
+  end.setHours(23, 59, 59, 999)
+  return { start, end }
+}
+
+function shiftDate(dateStr: string, days: number): string {
+  const d = new Date(dateStr)
+  d.setDate(d.getDate() + days)
+  return d.toISOString().split('T')[0]
+}
+
 function timeSince(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime()
   const sec = Math.floor(diff / 1000)
@@ -55,45 +69,59 @@ export default function Events() {
   const [events, setEvents] = useState<SystemEvent[]>([])
   const [devices, setDevices] = useState<DeviceControl[]>([])
   const [selectedDeviceId, setSelectedDeviceId] = useState('all')
+  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('all')
   const [deleting, setDeleting] = useState(false)
   const [changingTracking, setChangingTracking] = useState(false)
 
   useEffect(() => {
-    const fetch = async () => {
-      const [{ data: eventData }, { data: deviceData }] = await Promise.all([
-        supabase
-        .from('system_events')
-        .select('*')
-        .order('timestamp', { ascending: false })
-        .limit(100),
-        supabase
-          .from('devices')
-          .select('id, name, track_events_enabled')
-          .order('name', { ascending: true }),
-      ])
+    const fetchDevices = async () => {
+      const { data: deviceData } = await supabase
+        .from('devices')
+        .select('id, name, track_events_enabled')
+        .order('name', { ascending: true })
 
-      if (eventData) setEvents(eventData as SystemEvent[])
-      if (deviceData) {
-        const nextDevices = deviceData as DeviceControl[]
-        setDevices(nextDevices)
-        if (nextDevices.length > 0) {
-          setSelectedDeviceId((prev) => (prev === 'all' ? nextDevices[0].id : prev))
-        }
+      if (!deviceData) return
+      const nextDevices = deviceData as DeviceControl[]
+      setDevices(nextDevices)
+      if (nextDevices.length > 0) {
+        setSelectedDeviceId((prev) => (prev === 'all' ? nextDevices[0].id : prev))
       }
-      setLoading(false)
     }
-    fetch()
+    fetchDevices()
 
     const ch = supabase.channel('events_live')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'system_events' }, (payload) => {
-        setEvents(prev => [payload.new as SystemEvent, ...prev].slice(0, 100))
+        const incoming = payload.new as SystemEvent
+        const { start, end } = dayBounds(selectedDate)
+        const ts = new Date(incoming.timestamp)
+        if (ts < start || ts > end) return
+        setEvents(prev => [incoming, ...prev].slice(0, 1000))
       })
       .subscribe()
 
     return () => { supabase.removeChannel(ch) }
-  }, [])
+  }, [selectedDate])
+
+  useEffect(() => {
+    const fetchEventsByDate = async () => {
+      setLoading(true)
+      const { start, end } = dayBounds(selectedDate)
+      const { data: eventData } = await supabase
+        .from('system_events')
+        .select('*')
+        .gte('timestamp', start.toISOString())
+        .lte('timestamp', end.toISOString())
+        .order('timestamp', { ascending: false })
+        .limit(1000)
+
+      setEvents((eventData ?? []) as SystemEvent[])
+      setLoading(false)
+    }
+
+    fetchEventsByDate()
+  }, [selectedDate])
 
   const activeDevice = devices.find((d) => d.id === selectedDeviceId) ?? null
 
@@ -187,10 +215,42 @@ export default function Events() {
               Event Log
             </h2>
             <p style={{ color: 'var(--text-muted)', fontSize: '11px', margin: '3px 0 0' }}>
-              {filtered.length} events · Real-time stream
+              {filtered.length} events · {selectedDate}
             </p>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <button
+              onClick={() => setSelectedDate((prev) => shiftDate(prev, -1))}
+              style={{
+                padding: '5px 9px', borderRadius: '6px',
+                border: '1px solid var(--border)', background: 'var(--bg-card)',
+                color: 'var(--text-primary)', fontSize: '12px', cursor: 'pointer',
+              }}
+            >
+              Prev
+            </button>
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              style={{
+                padding: '5px 10px',
+                background: 'var(--bg-card)', border: '1px solid var(--border)',
+                borderRadius: '6px', color: 'var(--text-primary)',
+                fontSize: '11px', outline: 'none', cursor: 'pointer',
+                fontFamily: "'Inter', sans-serif",
+              }}
+            />
+            <button
+              onClick={() => setSelectedDate((prev) => shiftDate(prev, 1))}
+              style={{
+                padding: '5px 9px', borderRadius: '6px',
+                border: '1px solid var(--border)', background: 'var(--bg-card)',
+                color: 'var(--text-primary)', fontSize: '12px', cursor: 'pointer',
+              }}
+            >
+              Next
+            </button>
             <label style={{ color: 'var(--text-muted)', fontSize: '11px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
               Device
             </label>

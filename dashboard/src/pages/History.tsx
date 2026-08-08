@@ -36,6 +36,12 @@ interface DeviceControl {
   track_history_enabled: boolean
 }
 
+function shiftDate(dateStr: string, days: number): string {
+  const d = new Date(dateStr)
+  d.setDate(d.getDate() + days)
+  return d.toISOString().split('T')[0]
+}
+
 function calcDistance(records: GpsRecord[]): number {
   if (records.length < 2) return 0
   return records.reduce((acc, r, i) => {
@@ -329,6 +335,20 @@ export default function History() {
             <label style={{ color: 'var(--text-muted)', fontSize: '11px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
               Date
             </label>
+            <button
+              onClick={() => setDate((prev) => shiftDate(prev, -1))}
+              style={{
+                padding: '7px 10px',
+                borderRadius: '6px',
+                border: '1px solid var(--border)',
+                background: 'var(--bg-card)',
+                color: 'var(--text-primary)',
+                fontSize: '12px',
+                cursor: 'pointer',
+              }}
+            >
+              Prev
+            </button>
             <input
               type="date"
               value={date}
@@ -341,11 +361,25 @@ export default function History() {
                 fontFamily: "'Inter', sans-serif",
               }}
             />
+            <button
+              onClick={() => setDate((prev) => shiftDate(prev, 1))}
+              style={{
+                padding: '7px 10px',
+                borderRadius: '6px',
+                border: '1px solid var(--border)',
+                background: 'var(--bg-card)',
+                color: 'var(--text-primary)',
+                fontSize: '12px',
+                cursor: 'pointer',
+              }}
+            >
+              Next
+            </button>
           </div>
         </div>
 
         {/* Stats */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '10px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '10px' }}>
           {stats.map(({ label, value, icon, accent }) => (
             <div key={label} className="anim-fade-up" style={{
               background: 'var(--bg-card)', border: '1px solid var(--border)',

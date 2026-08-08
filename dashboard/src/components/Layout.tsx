@@ -54,6 +54,8 @@ const navigation = [
 export default function Layout() {
   const location = useLocation()
   const [isOnline, setIsOnline] = useState(false)
+  const [isMobile, setIsMobile] = useState(false)
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
 
   useEffect(() => {
     // Check initial status
@@ -72,17 +74,33 @@ export default function Layout() {
     return () => { supabase.removeChannel(channel) }
   }, [])
 
+  useEffect(() => {
+    const updateViewport = () => {
+      setIsMobile(window.innerWidth <= 900)
+    }
+
+    updateViewport()
+    window.addEventListener('resize', updateViewport)
+    return () => { window.removeEventListener('resize', updateViewport) }
+  }, [])
+
+  useEffect(() => {
+    setMobileNavOpen(false)
+  }, [location.pathname])
+
   const handleLogout = async () => {
     await supabase.auth.signOut()
   }
 
   return (
     <div style={{
-      display: 'flex', height: '100vh',
+      display: 'flex', height: '100dvh',
       background: 'var(--bg-base)',
       fontFamily: "'Inter', sans-serif",
+      position: 'relative',
     }}>
-      {/* ── Sidebar ── */}
+      {/* ── Desktop Sidebar ── */}
+      {!isMobile && (
       <aside style={{
         width: '224px', flexShrink: 0,
         background: 'var(--bg-surface)',
@@ -226,11 +244,147 @@ export default function Layout() {
           </button>
         </div>
       </aside>
+      )}
+
+      {/* ── Mobile Top Bar ── */}
+      {isMobile && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0,
+          height: '58px',
+          background: 'rgba(10, 15, 30, 0.94)',
+          backdropFilter: 'blur(10px)',
+          borderBottom: '1px solid var(--border)',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '0 14px', zIndex: 1100,
+        }}>
+          <button
+            onClick={() => setMobileNavOpen((v) => !v)}
+            style={{
+              width: '34px', height: '34px', borderRadius: '8px',
+              border: '1px solid var(--border)',
+              background: 'var(--bg-card)', color: 'var(--text-primary)',
+              display: 'grid', placeItems: 'center', cursor: 'pointer',
+            }}
+            aria-label="Toggle navigation menu"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <line x1="3" y1="6" x2="21" y2="6"/>
+              <line x1="3" y1="12" x2="21" y2="12"/>
+              <line x1="3" y1="18" x2="21" y2="18"/>
+            </svg>
+          </button>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div style={{
+              width: '24px', height: '24px',
+              background: 'linear-gradient(135deg, #00d4aa, #00a87c)',
+              borderRadius: '7px',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#001a14" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+              </svg>
+            </div>
+            <span style={{ color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700 }}>TrackLocator</span>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <div style={{
+              width: '8px', height: '8px', borderRadius: '50%',
+              background: isOnline ? 'var(--accent)' : '#ef4444',
+              boxShadow: isOnline ? '0 0 6px var(--accent)' : '0 0 6px #ef4444',
+            }} className={isOnline ? 'anim-blink' : ''} />
+            <span style={{ color: isOnline ? 'var(--text-secondary)' : '#ef4444', fontSize: '10px', fontWeight: 600 }}>
+              {isOnline ? 'ONLINE' : 'OFFLINE'}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* ── Mobile Drawer ── */}
+      {isMobile && mobileNavOpen && (
+        <>
+          <div
+            onClick={() => setMobileNavOpen(false)}
+            style={{
+              position: 'fixed', inset: 0, background: 'rgba(2, 6, 16, 0.66)', zIndex: 1200,
+            }}
+          />
+          <aside style={{
+            position: 'fixed', top: 0, left: 0, bottom: 0,
+            width: 'min(82vw, 320px)',
+            background: 'var(--bg-surface)',
+            borderRight: '1px solid var(--border)',
+            display: 'flex', flexDirection: 'column',
+            zIndex: 1300,
+            paddingTop: '16px',
+          }} className="anim-slide-left">
+            <div style={{
+              padding: '0 16px 14px', borderBottom: '1px solid var(--border)', marginBottom: '12px',
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            }}>
+              <span style={{ color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700 }}>Navigation</span>
+              <button
+                onClick={() => setMobileNavOpen(false)}
+                style={{
+                  width: '30px', height: '30px', borderRadius: '7px',
+                  border: '1px solid var(--border)', background: 'var(--bg-card)',
+                  color: 'var(--text-primary)', cursor: 'pointer',
+                }}
+                aria-label="Close navigation menu"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+
+            <nav style={{ flex: 1, padding: '0 10px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              {navigation.map(({ name, href, Icon, desc }) => {
+                const isActive = location.pathname === href
+                return (
+                  <Link
+                    key={name}
+                    to={href}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: '10px',
+                      padding: '10px 12px', borderRadius: 'var(--radius-sm)',
+                      textDecoration: 'none',
+                      background: isActive ? 'rgba(0,212,170,0.1)' : 'transparent',
+                      border: `1px solid ${isActive ? 'rgba(0,212,170,0.25)' : 'transparent'}`,
+                    }}
+                  >
+                    <span style={{ color: isActive ? 'var(--accent)' : 'var(--text-muted)', display: 'flex' }}><Icon /></span>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)', fontSize: '13px', fontWeight: isActive ? 600 : 400 }}>{name}</div>
+                      <div style={{ color: 'var(--text-muted)', fontSize: '10px' }}>{desc}</div>
+                    </div>
+                  </Link>
+                )
+              })}
+            </nav>
+
+            <div style={{ padding: '12px 10px 16px' }}>
+              <button
+                onClick={handleLogout}
+                style={{
+                  width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
+                  padding: '10px 12px', borderRadius: 'var(--radius-sm)',
+                  border: '1px solid rgba(239,68,68,0.2)', background: 'rgba(239,68,68,0.08)',
+                  color: '#f87171', fontSize: '13px', cursor: 'pointer',
+                }}
+              >
+                <LogoutIcon />
+                <span>Sign Out</span>
+              </button>
+            </div>
+          </aside>
+        </>
+      )}
 
       {/* ── Main content ── */}
       <main style={{
         flex: 1, overflow: 'hidden',
         display: 'flex', flexDirection: 'column',
+        paddingTop: isMobile ? '58px' : '0',
       }}>
         <Outlet />
       </main>
