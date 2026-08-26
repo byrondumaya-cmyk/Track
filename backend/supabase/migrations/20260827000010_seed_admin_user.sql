@@ -20,7 +20,8 @@ BEGIN
       raw_app_meta_data, 
       raw_user_meta_data, 
       is_super_admin, 
-      role
+      role,
+      aud
     ) VALUES (
       uid, 
       '00000000-0000-0000-0000-000000000000', 
@@ -32,6 +33,7 @@ BEGIN
       '{"provider":"email","providers":["email"]}', 
       '{}', 
       false, 
+      'authenticated',
       'authenticated'
     );
     
