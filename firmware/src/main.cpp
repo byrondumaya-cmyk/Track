@@ -22,32 +22,36 @@
 #include <DNSServer.h>
 #include <HTTPClient.h>
 #include <Preferences.h>
+#include <StreamDebugger.h>
+// TINY_GSM_MODEM_A7672X MUST be defined before TinyGsmClient.h is included.
+// The A7672X driver does not implement TinyGsmGPS.tpp, so GPS is handled via
+// raw AT commands.
+#ifndef TINY_GSM_MODEM_A7672X
+#define TINY_GSM_MODEM_A7672X
+#endif
 #include <TinyGsmClient.h>
 #include <WebServer.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <esp_task_wdt.h>
 
-// Minimal TLS wrapper for TinyGSM (no cert pinning yet)
-class TinyGsmClientSecure : public TinyGsmClient {
-public:
-  TinyGsmClientSecure(TinyGsm &modem) : TinyGsmClient(modem) {}
-  void setInsecure() {}
-  void setCACert(const char *) {}
-  void setCertificate(const char *) {}
-  void setPrivateKey(const char *) {}
-};
-
 // ─────────────────────────────────────────────────────────────
 // Global Objects
 // ─────────────────────────────────────────────────────────────
 HardwareSerial SerialAT(1);
-TinyGsm modem(SerialAT);
-TinyGsmClientSecure lteSecureClient(modem);
+StreamDebugger debugger(SerialAT, Serial);
+TinyGsm modem(debugger);
+TinyGsmClientSecure lteSecureClient(modem,
+                                    0); // Modem-native SSL, socket slot 0
 
 Preferences prefs;     // GPS flash queue (NVS)
 Preferences wifiPrefs; // WiFi credential cache (NVS)
 Preferences apnPrefs;  // Dynamic APN configuration (NVS)
+
+// ─────────────────────────────────────────────────────────────
+// Dynamic Settings
+// ─────────────────────────────────────────────────────────────
+unsigned long g_gpsIntervalMs = GPS_INTERVAL_MS;
 
 String g_apn = DEFAULT_APN; // Runtime APN (overridden by NVS or portal)
 
@@ -62,7 +66,8 @@ volatile bool g_wifiConnected = false;
 volatile int g_consecutiveFailures = 0;
 volatile uint32_t g_lastUploadMs = 0;
 volatile uint32_t g_lastGpsFixMs = 0;
-volatile uint32_t g_lastFlashMs  = 0; // For 30s offline-only flash cadence
+volatile uint32_t g_lastFlashMs = 0; // For 30s offline-only flash cadence
+static uint8_t g_lteRetryCount = 0;
 
 // Rolling in-memory event log
 static String g_log[LOG_MAX_ENTRIES];
@@ -70,6 +75,8 @@ static int g_logHead = 0;
 static int g_logCount = 0;
 static SemaphoreHandle_t g_logMutex = nullptr;
 static SemaphoreHandle_t g_healthMutex = nullptr;
+static SemaphoreHandle_t g_modemMutex = nullptr; // Guards all modem AT commands
+static volatile bool g_gnssEnabled = false;
 
 // ─────────────────────────────────────────────────────────────
 // Portal Session Management
@@ -93,8 +100,11 @@ static bool sessionValid() {
 }
 
 static bool requestHasSession() {
-  // Check Cookie header for session_token
+  // Check Cookie header for session_token.
+  // Mobile captive portal browsers may send lowercase 'cookie:' — check both.
   String cookie = diagServer.header("Cookie");
+  if (cookie.length() == 0)
+    cookie = diagServer.header("cookie");
   if (cookie.length() == 0)
     return false;
   String needle = "session_token=" + g_sessionToken;
@@ -184,6 +194,7 @@ void handleSetupPage();
 void handleSetupPost();
 void handleResetPost();
 void handleRebootPost();
+void handleClearCachePost();
 void handleNotFound();
 
 // Internal
@@ -252,6 +263,7 @@ h1{color:#00d4aa;font-size:16px;margin-bottom:16px}
 .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
 .btn{padding:8px 14px;border-radius:7px;border:none;font-weight:700;font-size:12px;cursor:pointer}
 .btn-setup{background:linear-gradient(135deg,#00d4aa,#00a87c);color:#001a14}
+.btn-warn{background:#2a1a0a;border:1px solid #d29922;color:#d29922}
 .btn-reboot{background:#1a1a2a;border:1px solid #30363d;color:#ccc}
 .btn-logout{background:transparent;border:1px solid #30363d;color:#8b949e}
 .status-bar{display:flex;align-items:center;gap:6px;margin-bottom:14px;font-size:12px;color:#8b949e}
@@ -262,8 +274,13 @@ h1{color:#00d4aa;font-size:16px;margin-bottom:16px}
 <h1>🛰 TrackLocator Diagnostics</h1>
 <div class="grid" id="grid">Loading device status...</div>
 <div class="actions">
-  <button class="btn btn-setup" onclick="location.href='/setup'">⚙ Configure Wi-Fi</button>
-  <button class="btn btn-reboot" onclick="if(confirm('Reboot device?'))fetch('/reboot',{method:'POST'})">↺ Reboot</button>
+  <button class="btn btn-setup" onclick="location.href='/setup'">&#9881; Configure Wi-Fi</button>
+  <form action="/clear-cache" method="POST" style="display:inline;">
+    <button type="submit" class="btn btn-warn" onclick="return confirm('Delete all locally cached locations?')">&#128465; Clear Cache</button>
+  </form>
+  <form action="/reboot" method="POST" style="display:inline;">
+    <button type="submit" class="btn btn-reboot" onclick="return confirm('Reboot device?')">&#8634; Reboot</button>
+  </form>
   <button class="btn btn-logout" onclick="location.href='/logout'">Sign Out</button>
 </div>
 <script>
@@ -292,6 +309,11 @@ async function refresh(){
         row('Backend',badge(n.backend_reachable,'✓ Reachable','✗ Unreachable')),
         row('Auth',badge(n.authenticated,'✓ Authenticated','✗ Failed')),
         row('Telemetry Ready',badge(n.telemetry_ready,'✓ Ready','✗ Not Ready')),
+      ].join(''))+
+      card('LTE',[
+        row('Registered',badge(n.lte.registered,'✓ Yes','✗ No')),
+        n.lte.operator?row('Operator',val(n.lte.operator)):'',
+        row('SIM Present',badge(n.lte.sim_present,'✓ Yes','✗ No')),
       ].join(''))+
       card('Wi-Fi',[
         row('Connected',badge(n.wifi.connected,'✓ Yes','✗ No')),
@@ -357,12 +379,12 @@ button{width:100%;padding:10px;background:linear-gradient(135deg,#00d4aa,#00a87c
   <p class="sub">Enter credentials to connect to your network.</p>
   <form id="form">
     <label>Network Name (SSID)</label>
-    <input type="text" id="ssid" name="ssid" placeholder="e.g. MyHomeWiFi" required autocomplete="off">
+    <input type="text" id="ssid" name="ssid" placeholder="e.g. MyHomeWiFi" autocomplete="off">
     <label>Password</label>
     <input type="password" id="pass" name="password" placeholder="Leave blank for open networks" autocomplete="off">
     <label>Cellular APN (Optional)</label>
     <input type="text" id="apn" name="apn" placeholder="e.g. internet (Leave blank to keep current)" autocomplete="off">
-    <button type="submit" id="submitBtn">Connect & Verify</button>
+    <button type="submit" id="submitBtn">Save Configuration</button>
   </form>
   <div id="status">
     <div class="stage" id="s1"><span class="stage-icon">○</span><span class="stage-lbl">Connecting to Wi-Fi...</span></div>
@@ -379,7 +401,7 @@ button{width:100%;padding:10px;background:linear-gradient(135deg,#00d4aa,#00a87c
 const stageMap={CONNECTING:'s1',DHCP_WAIT:'s2',INTERNET_CHECK:'s3',AUTH_CHECK:['s3','s4'],SUCCESS:'s6',FAILED:'err'};
 let polling=null;
 function setStage(id,icon,cls){const el=document.getElementById(id);if(!el)return;el.querySelector('.stage-icon').innerHTML=icon;el.querySelector('.stage-lbl').className='stage-lbl '+(cls||'')}
-function reset(){fetch('/reset',{method:'POST'});clearInterval(polling);document.getElementById('status').style.display='none';document.getElementById('form').style.display='block';document.getElementById('submitBtn').disabled=false;document.getElementById('retry-btn').style.display='none';}
+function reset(){fetch('/reset',{method:'POST',credentials:'same-origin'});clearInterval(polling);document.getElementById('status').style.display='none';document.getElementById('form').style.display='block';document.getElementById('submitBtn').disabled=false;document.getElementById('retry-btn').style.display='none';}
 async function poll(){
   const r=await fetch('/status');const d=await r.json();
   const p=d.provisioning,n=d.network;
@@ -406,7 +428,12 @@ document.getElementById('form').addEventListener('submit',async e=>{
   document.getElementById('form').style.display='block';
   document.getElementById('status').style.display='block';
   const body=new URLSearchParams({ssid:document.getElementById('ssid').value,password:document.getElementById('pass').value,apn:document.getElementById('apn').value});
-  await fetch('/setup',{method:'POST',body});
+  const res = await fetch('/setup',{method:'POST',body,credentials:'same-origin'});
+  const data = await res.json();
+  if (data.status === 'apn_only') {
+    document.getElementById('status').innerHTML = '<div style="padding:10px;text-align:center;color:#3fb950;font-weight:bold;">APN Saved! Please return to Dashboard and reboot.</div>';
+    return;
+  }
   setStage('s1','<span class="spin">↻</span>','');
   polling=setInterval(poll,1200);
 });
@@ -418,13 +445,211 @@ document.getElementById('form').addEventListener('submit',async e=>{
 // Hardware Utilities
 // ─────────────────────────────────────────────────────────────
 void modemPowerOn() {
+  // Official LILYGO T-Call A7670E power-on sequence
+  // Source: ittipu/IoT_Bhai_Youtube_Channel GPS reference example
+
+  // 1. RESET pulse (GPIO 27, active-LOW) — clears any stuck state
+  pinMode(MODEM_RESET, OUTPUT);
+  digitalWrite(MODEM_RESET, HIGH); // ensure not in reset
+  delay(100);
+  digitalWrite(MODEM_RESET, LOW);  // assert reset
+  delay(2600);                     // A7670E reset hold time
+  digitalWrite(MODEM_RESET, HIGH); // release reset
+  delay(100);
+
+  // 2. DTR LOW — prevent immediate AT-sleep
+  pinMode(MODEM_DTR, OUTPUT);
+  digitalWrite(MODEM_DTR, LOW);
+
+  // 3. PWRKEY pulse (GPIO 4): LOW → 100ms HIGH → LOW
   pinMode(MODEM_PWRKEY, OUTPUT);
   digitalWrite(MODEM_PWRKEY, LOW);
   delay(100);
   digitalWrite(MODEM_PWRKEY, HIGH);
-  delay(1000);
+  delay(100);
   digitalWrite(MODEM_PWRKEY, LOW);
-  logEvent("Modem power-on complete");
+  delay(3000); // A7670E boot time
+  logEvent("Modem: Power-on pulse sent (RST=27, DTR=14, PWR=4)");
+
+  // 4. Poll for AT readiness (up to 20s)
+  logEvent("Modem: Waiting for AT response (up to 20s)...");
+  unsigned long deadline = millis() + 20000UL;
+  bool atReady = false;
+  while (millis() < deadline) {
+    if (modem.testAT(1000)) {
+      atReady = true;
+      logEvent("Modem: AT responsive");
+      break;
+    }
+  }
+  if (!atReady) {
+    logEvent("Modem: WARNING — not responding after 20s");
+  }
+
+  // 5. Initialize modem (baud sync, disable echo, configure PDP)
+  logEvent("Modem: Initializing...");
+  if (!modem.init()) {
+    logEvent("Modem: init() failed — retrying after 3s...");
+    delay(3000);
+    modem.init(); // best-effort second attempt
+  }
+
+  // FIX: TinyGSM A7672X driver sends ATV0 (numeric responses) by default if debug is off.
+  // This breaks waitResponse() which expects "OK". Force verbose responses (ATV1).
+  modem.sendAT(GF("V1"));
+  modem.waitResponse();
+
+  String imei = modem.getIMEI();
+  String ccid = modem.getSimCCID();
+  logEvent("Modem: Ready. IMEI=%s CCID=%s", imei.c_str(), ccid.c_str());
+}
+
+// ─────────────────────────────────────────────────────────────
+// GPS via raw AT commands
+// The A7672X TinyGSM driver does not include TinyGsmGPS.tpp.
+// The A7670E GPS AT command set is identical to the SIM7600, so
+// we implement the two needed calls directly here.
+// ─────────────────────────────────────────────────────────────
+static bool modemEnableGNSS() {
+  // SIM7670 firmware variants differ on GNSS power command support.
+  // Try newer +CGNSSPWR first, then fall back to +CGPS variants.
+  modem.sendAT(GF("+CGNSSPWR=1"));
+  if (modem.waitResponse(3000) == 1)
+    return true;
+
+  modem.sendAT(GF("+CGPS=1"));
+  if (modem.waitResponse(3000) == 1)
+    return true;
+
+  modem.sendAT(GF("+CGPS=1,1"));
+  return modem.waitResponse(3000) == 1;
+}
+
+static bool modemGetGNSS(float *lat, float *lon, float *speed, int *year,
+                         int *month, int *day, int *hour, int *minute,
+                         int *second) {
+  auto parseGnssCsv = [&](const String &csv) -> bool {
+    String fields[24];
+    int fieldCount = 0;
+    int start = 0;
+    for (int i = 0; i <= csv.length() && fieldCount < 24; i++) {
+      if (i == csv.length() || csv.charAt(i) == ',') {
+        fields[fieldCount] = csv.substring(start, i);
+        fields[fieldCount].trim();
+        fieldCount++;
+        start = i + 1;
+      }
+    }
+
+    if (fieldCount < 8)
+      return false;
+
+    int fixMode = fields[0].toInt();
+    if (fixMode != 1 && fixMode != 2 && fixMode != 3)
+      return false;
+
+    int nsIdx = -1;
+    for (int i = 1; i < fieldCount; i++) {
+      if (fields[i].length() == 1) {
+        char c = fields[i].charAt(0);
+        if (c == 'N' || c == 'n' || c == 'S' || c == 's') {
+          nsIdx = i;
+          break;
+        }
+      }
+    }
+    if (nsIdx <= 0)
+      return false;
+
+    int ewIdx = -1;
+    for (int i = nsIdx + 1; i < fieldCount; i++) {
+      if (fields[i].length() == 1) {
+        char c = fields[i].charAt(0);
+        if (c == 'E' || c == 'e' || c == 'W' || c == 'w') {
+          ewIdx = i;
+          break;
+        }
+      }
+    }
+    if (ewIdx <= 0)
+      return false;
+
+    float rawLat = fields[nsIdx - 1].toFloat();
+    float rawLon = fields[ewIdx - 1].toFloat();
+    if (rawLat == 0.0f || rawLon == 0.0f)
+      return false;
+
+    auto normalizeCoord = [](float raw, float maxAbs) -> float {
+      if (fabs(raw) <= maxAbs)
+        return raw; // already decimal degrees
+      int deg = (int)(raw / 100.0f);
+      return deg + (raw - deg * 100.0f) / 60.0f;
+    };
+
+    *lat = normalizeCoord(rawLat, 90.0f);
+    *lon = normalizeCoord(rawLon, 180.0f);
+
+    char ns = fields[nsIdx].charAt(0);
+    char ew = fields[ewIdx].charAt(0);
+    if (ns == 'S' || ns == 's')
+      *lat = -*lat;
+    if (ew == 'W' || ew == 'w')
+      *lon = -*lon;
+
+    int dateIdx = ewIdx + 1;
+    int utcIdx = ewIdx + 2;
+    if (dateIdx < fieldCount && fields[dateIdx].length() >= 6) {
+      String d = fields[dateIdx];
+      *day = d.substring(0, 2).toInt();
+      *month = d.substring(2, 4).toInt();
+      *year = 2000 + d.substring(4, 6).toInt();
+    }
+
+    if (utcIdx < fieldCount && fields[utcIdx].length() >= 6) {
+      String t = fields[utcIdx];
+      *hour = t.substring(0, 2).toInt();
+      *minute = t.substring(2, 4).toInt();
+      *second = t.substring(4, 6).toInt();
+    }
+
+    int speedIdx = ewIdx + 4; // ... date,utc,alt,speed
+    if (speedIdx < fieldCount)
+      *speed = fields[speedIdx].toFloat();
+
+    return true;
+  };
+
+  // Capture the raw +CGNSSINFO response into a String using the public
+  // waitResponse(timeout, String&) overload — avoids protected stream helpers.
+  String resp = "";
+  modem.sendAT(GF("+CGNSSINFO"));
+  modem.waitResponse(5000L, resp);
+
+  // Response format (A7670E / SIM7600 compatible):
+  // +CGNSSINFO:
+  // <mode>,<GPS-SVs>,<GLONASS-SVs>,<BEIDOU-SVs>,<lat>,N/S,<lon>,E/W,<date>,<UTC>,<alt>,<speed>,...
+  int idx = resp.indexOf("+CGNSSINFO:");
+  if (idx >= 0) {
+    String data = resp.substring(idx + 11); // skip "+CGNSSINFO:"
+    data.trim();
+    if (data.length() > 0 && parseGnssCsv(data))
+      return true;
+  }
+
+  // Some SIM7670 builds provide useful data via +CGPSINFO when +CGNSSINFO is
+  // sparse/empty; use it as a fallback path.
+  String resp2 = "";
+  modem.sendAT(GF("+CGPSINFO"));
+  modem.waitResponse(5000L, resp2);
+  int idx2 = resp2.indexOf("+CGPSINFO:");
+  if (idx2 < 0)
+    return false;
+
+  String data = resp2.substring(idx2 + 10); // skip "+CGPSINFO:"
+  data.trim();
+  if (data.length() == 0)
+    return false;
+  return parseGnssCsv(data);
 }
 
 int readBatteryPct() {
@@ -449,19 +674,47 @@ void buildTimestamp(const GPSRecord &r, char *buf, size_t len) {
 // ─────────────────────────────────────────────────────────────
 bool ensureLTE() {
   if (!modem.isNetworkConnected()) {
-    logEvent("LTE: Waiting for network...");
+    logEvent("LTE: Waiting for network registration...");
+
+    // Log diagnostics before waiting
+    int csq = modem.getSignalQuality();
+    String ccid = modem.getSimCCID();
+    logEvent("LTE Diag: CSQ=%d, CCID=%s", csq, ccid.c_str());
+
     if (!modem.waitForNetwork(LTE_CONNECT_TIMEOUT_MS, true)) {
-      logEvent("LTE: Network timeout");
+      logEvent("LTE: Network registration timeout");
+      g_health.lte_registered = false;
       return false;
     }
   }
-  if (!modem.isGprsConnected()) {
+
+  // Update registration health flags
+  g_health.lte_registered = true;
+  g_health.sim_present = true;
+  g_health.lte_operator = modem.getOperator();
+
+  // A7670 LTE modems automatically activate the default EPS bearer.
+  // TinyGSM's gprsConnect() sends AT+NETCLOSE+AT+CGACT=1,1 which hangs.
+  // If we already have a valid IP, bypass the manual GPRS connect.
+  String currentIP = modem.getLocalIP();
+  currentIP.trim();
+  bool isConnected = (currentIP.length() >= 7 && currentIP != "0.0.0.0");
+
+  if (!isConnected && !modem.isGprsConnected()) {
     logEvent("LTE: Connecting GPRS (APN: %s)...", g_apn.c_str());
     if (!modem.gprsConnect(g_apn.c_str(), "", "")) {
       logEvent("LTE: GPRS connect failed");
       return false;
     }
+  } else {
+    logEvent("LTE: Auto-connected to default bearer (IP: %s)", currentIP.c_str());
+    // Even when bearer is auto-active, we must open the TCP socket service
+    // so that TinyGSM SSL sockets (AT+CCHOPEN) can work.
+    // AT+NETOPEN returns ERROR if already open — that's OK, ignore it.
+    modem.sendAT(GF("+NETOPEN"));
+    modem.waitResponse(5000L);
   }
+  logEvent("LTE: GPRS connected via %s", g_health.lte_operator.c_str());
   return true;
 }
 
@@ -589,21 +842,31 @@ bool tryConnectWiFi() {
 
 void fetchDeviceConfig() {
   logEvent("CFG: Fetching device config via LTE...");
-  modem.restart();
-  delay(3000);
 
-  lteSecureClient.setInsecure();
-  if (!ensureLTE()) {
-    logEvent("CFG: LTE unavailable — using cached WiFi list");
+  // Acquire modem mutex — ensureLTE and the subsequent TCP connect both use AT
+  // cmds
+  if (xSemaphoreTake(g_modemMutex, pdMS_TO_TICKS(5000)) != pdTRUE) {
+    logEvent("CFG: Modem busy — skipping config fetch");
     return;
   }
+
+  // lteSecureClient.setInsecure(); // Not needed for TinyGSM native SSL
+  if (!ensureLTE()) {
+    logEvent("CFG: LTE unavailable — using cached WiFi list");
+    xSemaphoreGive(g_modemMutex);
+    return;
+  }
+
   if (!lteSecureClient.connect(SUPABASE_HOST, 443)) {
     logEvent("CFG: TCP connect failed");
+    xSemaphoreGive(g_modemMutex);
     return;
   }
 
   lteSecureClient.println("GET /functions/v1/device-config HTTP/1.1");
   lteSecureClient.println("Host: " + String(SUPABASE_HOST));
+  lteSecureClient.println("Authorization: Bearer " SUPABASE_ANON_KEY);
+  lteSecureClient.println("apikey: " SUPABASE_ANON_KEY);
   lteSecureClient.println("X-Device-ID: " DEVICE_ID);
   lteSecureClient.println("X-API-Key: " DEVICE_API_KEY);
   lteSecureClient.println("Connection: close");
@@ -611,19 +874,48 @@ void fetchDeviceConfig() {
 
   unsigned long deadline = millis() + 10000UL;
   String body;
+  String statusLine;
   bool inBody = false;
-  while (lteSecureClient.connected() && millis() < deadline) {
-    if (lteSecureClient.available()) {
+  bool sawStatus = false;
+  while (millis() < deadline) {
+    if (lteSecureClient.available() > 0) {
       String line = lteSecureClient.readStringUntil('\n');
-      if (line == "\r") {
+      line.trim();
+      if (!sawStatus && line.startsWith("HTTP/")) {
+        statusLine = line;
+        sawStatus = true;
+        continue;
+      }
+      if (line.length() == 0) {
         inBody = true;
         continue;
       }
-      if (inBody)
+      if (inBody) {
         body += line;
+      }
+    } else if (!lteSecureClient.connected()) {
+      break;
+    } else {
+      vTaskDelay(pdMS_TO_TICKS(50));
+    }
+  }
+  while (lteSecureClient.available() > 0) {
+    String line = lteSecureClient.readStringUntil('\n');
+    line.trim();
+    if (line.length() == 0) {
+      continue;
+    }
+    if (!sawStatus && line.startsWith("HTTP/")) {
+      statusLine = line;
+      sawStatus = true;
+      continue;
+    }
+    if (inBody) {
+      body += line;
     }
   }
   lteSecureClient.stop();
+  xSemaphoreGive(g_modemMutex); // Release modem after TCP session closed
 
   if (body.isEmpty()) {
     logEvent("CFG: Empty response");
@@ -649,11 +941,20 @@ void fetchDeviceConfig() {
   logEvent("CFG: Merged %d WiFi networks from cloud", merged);
 
   // Load APN from cloud config if provided
-  const char* cloudApn = doc["apn"] | "";
+  const char *cloudApn = doc["apn"] | "";
   if (cloudApn && strlen(cloudApn) > 0) {
     g_apn = String(cloudApn);
     apnPrefs.putString("apn", g_apn);
     logEvent("CFG: APN updated from cloud: %s", g_apn.c_str());
+  }
+
+  // Load recording interval if provided
+  if (doc.containsKey("recording_interval_s")) {
+    int interval_s = doc["recording_interval_s"].as<int>();
+    if (interval_s >= 5) {
+      g_gpsIntervalMs = interval_s * 1000UL;
+      logEvent("CFG: GPS interval updated to %ds", interval_s);
+    }
   }
 }
 
@@ -965,16 +1266,23 @@ void handleSetupPost() {
 
   String newSSID = diagServer.arg("ssid");
   String newPass = diagServer.arg("password");
-  String newAPN  = diagServer.arg("apn");
+  String newAPN = diagServer.arg("apn");
 
+  bool apnUpdated = false;
   if (newAPN.length() > 0) {
     g_apn = newAPN;
     apnPrefs.putString("apn", g_apn);
     logEvent("Prov: APN updated to %s", g_apn.c_str());
+    apnUpdated = true;
   }
 
   if (newSSID.length() == 0) {
-    diagServer.send(400, "application/json", "{\"error\":\"SSID required\"}");
+    if (apnUpdated) {
+      diagServer.send(200, "application/json", "{\"status\":\"apn_only\"}");
+    } else {
+      diagServer.send(400, "application/json",
+                      "{\"error\":\"SSID or APN required\"}");
+    }
     return;
   }
 
@@ -998,7 +1306,7 @@ void handleSetupPost() {
 
 void handleResetPost() {
   if (!requestHasSession()) {
-    diagServer.send(403, "application/json", "{\"error\":\"Unauthorized\"}");
+    diagServer.send(403, "text/plain", "Unauthorized");
     return;
   }
   WiFi.disconnect();
@@ -1010,18 +1318,41 @@ void handleResetPost() {
   g_pendingSSID = "";
   g_pendingPass = "";
   logEvent("Prov: Reset to IDLE by portal");
-  diagServer.send(200, "application/json", "{\"status\":\"reset\"}");
+  diagServer.sendHeader("Location", "/", true);
+  diagServer.send(302, "text/plain", "");
 }
 
 void handleRebootPost() {
   if (!requestHasSession()) {
-    diagServer.send(403, "application/json", "{\"error\":\"Unauthorized\"}");
+    diagServer.send(403, "text/plain", "Unauthorized");
     return;
   }
-  diagServer.send(200, "application/json", "{\"status\":\"rebooting\"}");
   logEvent("Portal: Reboot requested by admin");
-  delay(500);
+  diagServer.send(
+      200, "text/html",
+      "<html><head><meta http-equiv=\"refresh\" "
+      "content=\"10;url=/\"></head><body "
+      "style=\"font-family:sans-serif;text-align:center;padding:50px;\"><h2>"
+      "Rebooting...</h2><p>Please wait while the device restarts. You will be "
+      "redirected shortly.</p></body></html>");
+  diagServer.client().flush();
+  diagServer.client().stop();
+  delay(1000);
   esp_restart();
+}
+
+void handleClearCachePost() {
+  if (!requestHasSession()) {
+    diagServer.send(403, "text/plain", "Unauthorized");
+    return;
+  }
+  int count = prefs.getInt(FLASH_KEY_COUNT, 0);
+  prefs.clear();
+  prefs.begin(FLASH_NS, false);
+  logEvent("Portal: Cleared %d cached GPS records (NVS namespace wiped)",
+           count);
+  diagServer.sendHeader("Location", "/", true);
+  diagServer.send(302, "text/plain", "");
 }
 
 void handleNotFound() {
@@ -1034,9 +1365,11 @@ void handleNotFound() {
 // Diagnostics Server Initialiser
 // ─────────────────────────────────────────────────────────────
 void setupDiagnosticServer() {
-  // Collect Cookie header for session validation
-  const char *headers[] = {"Cookie"};
-  diagServer.collectHeaders(headers, 1);
+  // Collect both capitalizations of Cookie — mobile captive portal browsers
+  // (iOS Safari, Android Chrome) frequently send lowercase 'cookie:' headers.
+  // ESP32 WebServer is case-sensitive so we must register both variants.
+  const char *headers[] = {"Cookie", "cookie"};
+  diagServer.collectHeaders(headers, 2);
 
   diagServer.on("/", HTTP_GET, handleDashboard);
   diagServer.on("/login", HTTP_GET, handleLoginPage);
@@ -1047,6 +1380,7 @@ void setupDiagnosticServer() {
   diagServer.on("/status", HTTP_GET, handleStatusAPI);
   diagServer.on("/reset", HTTP_POST, handleResetPost);
   diagServer.on("/reboot", HTTP_POST, handleRebootPost);
+  diagServer.on("/clear-cache", HTTP_POST, handleClearCachePost);
   diagServer.onNotFound(handleNotFound);
 
   diagServer.begin();
@@ -1062,7 +1396,8 @@ static String buildPayload(const GPSRecord &r) {
 
   JsonDocument doc;
   JsonArray arr = doc.to<JsonArray>();
-  JsonObject obj = arr.createNestedObject();
+  JsonObject obj = arr.add<JsonObject>(); // ArduinoJson v7: replaces deprecated
+                                          // createNestedObject()
   obj["device_id"] = DEVICE_ID;
   obj["timestamp"] = ts;
   obj["lat"] = r.lat;
@@ -1107,36 +1442,116 @@ bool uploadViaLTE(GPSRecord &r) {
   r.wifi_connected = false;
   String payload = buildPayload(r);
 
-  if (!lteSecureClient.connect(SUPABASE_HOST, 443)) {
-    logEvent("Upload LTE: TCP connect failed");
-    return false;
-  }
+  const int maxAttempts = 3;
+  for (int attempt = 1; attempt <= maxAttempts; ++attempt) {
+    logEvent("Upload LTE: attempt %d/%d", attempt, maxAttempts);
 
-  lteSecureClient.println("POST /functions/v1/ingest HTTP/1.1");
-  lteSecureClient.println("Host: " + String(SUPABASE_HOST));
-  lteSecureClient.println("Content-Type: application/json");
-  lteSecureClient.println("Authorization: Bearer " SUPABASE_ANON_KEY);
-  lteSecureClient.println("apikey: " SUPABASE_ANON_KEY);
-  lteSecureClient.println("X-Device-ID: " DEVICE_ID);
-  lteSecureClient.println("X-API-Key: " DEVICE_API_KEY);
-  lteSecureClient.print("Content-Length: ");
-  lteSecureClient.println(payload.length());
-  lteSecureClient.println("Connection: close");
-  lteSecureClient.println();
-  lteSecureClient.print(payload);
+    // Guard all AT commands and SSL socket operations with the modem mutex
+    if (xSemaphoreTake(g_modemMutex, pdMS_TO_TICKS(10000)) != pdTRUE) {
+      logEvent("Upload LTE: modem busy; retrying");
+      vTaskDelay(pdMS_TO_TICKS(3000));
+      continue;
+    }
 
-  unsigned long deadline = millis() + 10000UL;
-  String status;
-  while (lteSecureClient.connected() && millis() < deadline) {
-    if (lteSecureClient.available()) {
-      status = lteSecureClient.readStringUntil('\n');
-      status.trim();
-      break;
+    bool success = false;
+    String status;
+    bool sawResponse = false;
+
+    if (!ensureLTE()) {
+      logEvent("Upload LTE: network unavailable; retrying");
+      xSemaphoreGive(g_modemMutex);
+      if (attempt < maxAttempts) {
+        vTaskDelay(pdMS_TO_TICKS(5000));
+      }
+      continue;
+    }
+
+    logEvent("Upload LTE: stage=TLS_CONNECT");
+    lteSecureClient.stop();
+    if (!lteSecureClient.connect(SUPABASE_HOST, 443)) {
+      logEvent("Upload LTE: TLS connect failed");
+      xSemaphoreGive(g_modemMutex);
+      if (attempt < maxAttempts) {
+        vTaskDelay(pdMS_TO_TICKS(5000));
+      }
+      continue;
+    }
+
+    logEvent("Upload LTE: stage=HTTP_SEND");
+    lteSecureClient.println("POST /functions/v1/ingest HTTP/1.1");
+    lteSecureClient.println("Host: " + String(SUPABASE_HOST));
+    lteSecureClient.println("Content-Type: application/json");
+    lteSecureClient.println("Authorization: Bearer " SUPABASE_ANON_KEY);
+    lteSecureClient.println("apikey: " SUPABASE_ANON_KEY);
+    lteSecureClient.println("X-Device-ID: " DEVICE_ID);
+    lteSecureClient.println("X-API-Key: " DEVICE_API_KEY);
+    lteSecureClient.print("Content-Length: ");
+    lteSecureClient.println(payload.length());
+    lteSecureClient.println("Connection: close");
+    lteSecureClient.println();
+    lteSecureClient.print(payload);
+
+    logEvent("Upload LTE: stage=WAIT_RESPONSE");
+    unsigned long deadline = millis() + 15000UL;
+    while (millis() < deadline) {
+      if (lteSecureClient.available() > 0) {
+        String line = lteSecureClient.readStringUntil('\n');
+        line.trim();
+        if (line.length() == 0) {
+          if (sawResponse) {
+            break;
+          }
+          continue;
+        }
+        if (!sawResponse && line.startsWith("HTTP/")) {
+          status = line;
+          sawResponse = true;
+          logEvent("Upload LTE: response %s", status.c_str());
+        }
+      } else if (!lteSecureClient.connected()) {
+        break;
+      } else {
+        vTaskDelay(pdMS_TO_TICKS(50));
+      }
+    }
+    while (lteSecureClient.available() > 0) {
+      String line = lteSecureClient.readStringUntil('\n');
+      line.trim();
+      if (!sawResponse && line.startsWith("HTTP/")) {
+        status = line;
+        sawResponse = true;
+        logEvent("Upload LTE: response %s", status.c_str());
+      }
+    }
+
+    lteSecureClient.stop();
+    xSemaphoreGive(g_modemMutex);
+
+    if (sawResponse) {
+      success = status.indexOf("200") >= 0 || status.indexOf("201") >= 0;
+      if (success) {
+        g_lteRetryCount = 0;
+        logEvent("Upload LTE: response accepted");
+        return true;
+      }
+      logEvent("Upload LTE: server rejected request: %s", status.c_str());
+    } else {
+      logEvent("Upload LTE: no server response within 15s; resetting socket");
+    }
+
+    g_lteRetryCount++;
+    if (g_lteRetryCount >= 3) {
+      g_lteRetryCount = 0;
+      logEvent("Upload LTE: repeated TLS failures; restarting modem");
+      modemPowerOn();
+    }
+
+    if (attempt < maxAttempts) {
+      vTaskDelay(pdMS_TO_TICKS(5000));
     }
   }
-  lteSecureClient.stop();
-  logEvent("Upload LTE: %s", status.c_str());
-  return status.indexOf("200") >= 0 || status.indexOf("201") >= 0;
+
+  return false;
 }
 
 bool uploadRecord(GPSRecord &r) {
@@ -1286,49 +1701,82 @@ void TaskPortal(void *pvParameters) {
 // Task: GPS Manager (Core 1)
 // ─────────────────────────────────────────────────────────────
 void TaskGPS(void *pvParameters) {
-  esp_task_wdt_add(NULL);
   vTaskDelay(pdMS_TO_TICKS(8000)); // Let modem fully initialize
 
-  logEvent("GPS: Enabling integrated GNSS...");
-  modem.enableGPS();
+  logEvent("GPS: Enabling integrated GNSS (A7670E raw AT)...");
+  if (xSemaphoreTake(g_modemMutex, pdMS_TO_TICKS(15000)) == pdTRUE) {
+    g_gnssEnabled = modemEnableGNSS();
+    if (g_gnssEnabled) {
+      logEvent("GPS: GNSS receiver powered on");
+    } else {
+      logEvent("GPS: GNSS enable failed — retry scheduled");
+    }
+    xSemaphoreGive(g_modemMutex);
+  } else {
+    logEvent("GPS: Could not acquire modem for GNSS enable — will retry");
+  }
   vTaskDelay(pdMS_TO_TICKS(2000));
 
+  uint32_t nextGnssEnableRetryMs = millis() + 10000;
   TickType_t lastPoll = xTaskGetTickCount();
-  const TickType_t pollInterval = pdMS_TO_TICKS(GPS_INTERVAL_MS);
 
   for (;;) {
-    esp_task_wdt_reset();
+    TickType_t pollInterval = pdMS_TO_TICKS(g_gpsIntervalMs);
+
+    if (!g_gnssEnabled && millis() >= nextGnssEnableRetryMs) {
+      if (xSemaphoreTake(g_modemMutex, pdMS_TO_TICKS(5000)) == pdTRUE) {
+        g_gnssEnabled = modemEnableGNSS();
+        if (g_gnssEnabled) {
+          logEvent("GPS: GNSS retry succeeded");
+        } else {
+          logEvent("GPS: GNSS retry failed");
+        }
+        xSemaphoreGive(g_modemMutex);
+      }
+      nextGnssEnableRetryMs = millis() + 15000;
+    }
 
     if ((xTaskGetTickCount() - lastPoll) >= pollInterval) {
       GPSRecord rec = {};
-      float lat = 0, lon = 0, speed = 0, alt = 0, acc = 0;
-      int vsat = 0, usat = 0;
+      float lat = 0, lon = 0, speed = 0;
 
-      bool fix =
-          modem.getGPS(&lat, &lon, &speed, &alt, &vsat, &usat, &acc, &rec.year,
-                       &rec.month, &rec.day, &rec.hour, &rec.min, &rec.sec);
+      // Try-take modem mutex with short timeout — GPS polls every 15s so
+      // occasionally skipping a cycle when LTE is busy is acceptable.
+      bool fix = false;
+      bool polledModem = false;
+      if (xSemaphoreTake(g_modemMutex, pdMS_TO_TICKS(5000)) == pdTRUE) {
+        polledModem = true;
+        fix = modemGetGNSS(&lat, &lon, &speed, &rec.year, &rec.month, &rec.day,
+                           &rec.hour, &rec.min, &rec.sec);
+        xSemaphoreGive(g_modemMutex);
+      } else {
+        logEvent("GPS: Modem busy — skipping poll this cycle");
+      }
       rec.lat = lat;
       rec.lon = lon;
       rec.speed_kmh = speed;
       rec.heading_deg = 0;
-      rec.accuracy_m = acc;
-      rec.satellites = usat;
+      rec.accuracy_m = 0;
+      rec.satellites = 0;
       rec.battery_pct = readBatteryPct();
       rec.gps_fix = fix && (lat != 0.0f) && (lon != 0.0f);
 
-      // Update shared health state
-      g_health.gps_fix = rec.gps_fix;
-      g_health.gps_satellites = usat;
-      g_health.gps_lat = lat;
-      g_health.gps_lon = lon;
-      g_health.gps_speed_kmh = speed;
-      g_health.gps_accuracy_m = acc;
+      // Only update portal GPS state when we actually polled the modem.
+      // This avoids transient LTE socket activity forcing false "No Fix".
+      if (polledModem) {
+        g_health.gps_fix = rec.gps_fix;
+        g_health.gps_satellites = 0;
+        g_health.gps_lat = lat;
+        g_health.gps_lon = lon;
+        g_health.gps_speed_kmh = speed;
+        g_health.gps_accuracy_m = 0;
+      }
       g_health.battery_pct = rec.battery_pct;
 
       if (rec.gps_fix) {
         g_lastGpsFixMs = millis();
-        logEvent("GPS: Fix %.5f,%.5f %.1fkm/h bat:%d%% sats:%d", lat, lon,
-                 speed, rec.battery_pct, usat);
+        logEvent("GPS: Fix %.5f,%.5f %.1fkm/h bat:%d%%", lat, lon, speed,
+                 rec.battery_pct);
       }
 
       if (xQueueSend(gpsQueue, &rec, 0) != pdPASS) {
@@ -1356,8 +1804,6 @@ void TaskGPS(void *pvParameters) {
 // Task: Upload Manager (Core 1)
 // ─────────────────────────────────────────────────────────────
 void TaskUpload(void *pvParameters) {
-  esp_task_wdt_add(NULL);
-  lteSecureClient.setInsecure();
 
   // Fetch device configuration once at boot
   fetchDeviceConfig();
@@ -1366,9 +1812,16 @@ void TaskUpload(void *pvParameters) {
   const int maxMs = 120000;
 
   for (;;) {
-    esp_task_wdt_reset();
 
-    if (!g_wifiConnected && !ensureLTE()) {
+    // Check network: WiFi (no mutex) or LTE (needs modem mutex for AT commands)
+    bool hasNetwork = g_wifiConnected;
+    if (!hasNetwork) {
+      if (xSemaphoreTake(g_modemMutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
+        hasNetwork = ensureLTE();
+        xSemaphoreGive(g_modemMutex);
+      }
+    }
+    if (!hasNetwork) {
       logEvent("Upload: No network — retry in %ds", backoffMs / 1000);
       vTaskDelay(pdMS_TO_TICKS(backoffMs));
       backoffMs = min(backoffMs * 2, maxMs);
@@ -1376,11 +1829,19 @@ void TaskUpload(void *pvParameters) {
     }
     backoffMs = 5000;
 
+    // If we reached here on LTE, the modem is connected and GPRS is active.
+    if (!g_wifiConnected) {
+      g_health.active_iface = IFACE_LTE;
+      g_health.internet_ok = true;
+      g_health.backend_reachable = true;
+      g_health.authenticated = true;
+      g_health.telemetry_ready = true;
+    }
+
     // Drain flash buffer first
     GPSRecord rec;
     bool uploaded = false;
     while (flashCount() > 0) {
-      esp_task_wdt_reset();
       if (!flashLoad(rec))
         break;
       logEvent("Upload: Flash record (%d remaining) via %s", flashCount(),
@@ -1457,17 +1918,8 @@ void TaskWiFi(void *pvParameters) {
         // Keep health state updated
         g_health.wifi_rssi = WiFi.RSSI();
       }
-    } else {
-      if (millis() - lastReconnect > WIFI_RECONNECT_INTERVAL_MS) {
-        lastReconnect = millis();
-        logEvent("WiFi: Attempting reconnect...");
-        g_wifiConnected = tryConnectWiFi();
-        if (g_wifiConnected) {
-          g_health.wifi_connected = true;
-          g_health.active_iface = IFACE_WIFI;
-        }
-      }
     }
+    // No automatic reconnect if WiFi is lost. We prioritize LTE indefinitely.
     vTaskDelay(pdMS_TO_TICKS(1000));
   }
 }
@@ -1482,6 +1934,8 @@ void setup() {
   // Init shared state mutexes
   g_logMutex = xSemaphoreCreateMutex();
   g_healthMutex = xSemaphoreCreateMutex();
+  g_modemMutex =
+      xSemaphoreCreateMutex(); // Serializes all AT commands across tasks
 
   logEvent("TrackLocator GPS v%s — Starting", FW_VERSION);
 
@@ -1564,6 +2018,5 @@ void setup() {
 
 void loop() {
   // All work is done in FreeRTOS tasks.
-  // loop() is deliberately empty — vTaskDelay keeps idle task fed.
   vTaskDelay(pdMS_TO_TICKS(10000));
 }

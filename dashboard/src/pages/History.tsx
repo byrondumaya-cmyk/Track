@@ -3,6 +3,7 @@ import { MapContainer, TileLayer, Polyline, Marker, Popup } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import { supabase } from '../lib/supabase'
 import L from 'leaflet'
+import { useRouteHistory } from '../hooks/useRouteHistory'
 
 delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl
 L.Icon.Default.mergeOptions({
@@ -57,7 +58,6 @@ function calcDistance(records: GpsRecord[]): number {
 
 export default function History() {
   const [date, setDate] = useState(new Date().toISOString().split('T')[0])
-  const [route, setRoute] = useState<GpsRecord[]>([])
   const [compliance, setCompliance] = useState<CheckpointCompliance[]>([])
   const [totalCheckpoints, setTotalCheckpoints] = useState(0)
   const [devices, setDevices] = useState<DeviceControl[]>([])
@@ -65,8 +65,26 @@ export default function History() {
   const [changingTracking, setChangingTracking] = useState(false)
   const [deletingHistory, setDeletingHistory] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
-  const [loading, setLoading] = useState(false)
+  const [loadingCompliance, setLoadingCompliance] = useState(false)
+  const [isMobile, setIsMobile] = useState(false)
+  const [statsExpanded, setStatsExpanded] = useState(true)
+  
+  const { route, loadingRoute } = useRouteHistory(date, selectedDeviceId, reloadKey)
+  const loading = loadingRoute || loadingCompliance
+
   const defaultCenter: [number, number] = [15.4912, 120.8321]
+
+  useEffect(() => {
+    const updateViewport = () => {
+      const mobile = window.innerWidth <= 900
+      setIsMobile(mobile)
+      if (!mobile) setStatsExpanded(true)
+      else setStatsExpanded(false)
+    }
+    updateViewport()
+    window.addEventListener('resize', updateViewport)
+    return () => window.removeEventListener('resize', updateViewport)
+  }, [])
 
   useEffect(() => {
     const fetchDevices = async () => {
@@ -87,26 +105,9 @@ export default function History() {
   }, [])
 
   useEffect(() => {
-    const fetchRoute = async () => {
-      setLoading(true)
-      const start = new Date(date); start.setHours(0, 0, 0, 0)
-      const end = new Date(date); end.setHours(23, 59, 59, 999)
-
-      // Fetch GPS Route
-      let routeQuery = supabase.from('gps_records')
-        .select('id, lat, lon, speed_kmh, battery_pct, timestamp')
-        .gte('timestamp', start.toISOString())
-        .lte('timestamp', end.toISOString())
-        .order('timestamp', { ascending: true })
-
-      if (selectedDeviceId !== 'all') {
-        routeQuery = routeQuery.eq('device_id', selectedDeviceId)
-      }
-
-      const { data: routeData } = await routeQuery
+    const fetchCompliance = async () => {
+      setLoadingCompliance(true)
       
-      if (routeData) setRoute(routeData as GpsRecord[])
-
       // Fetch Checkpoint Compliance
       let complianceQuery = supabase.from('daily_checkpoint_compliance')
         .select('*')
@@ -118,7 +119,6 @@ export default function History() {
       }
 
       const { data: compData } = await complianceQuery
-      
       if (compData) setCompliance(compData as CheckpointCompliance[])
 
       // Fetch Total Active Checkpoints
@@ -127,10 +127,9 @@ export default function History() {
         .eq('is_active', true)
       
       setTotalCheckpoints(count || 0)
-
-      setLoading(false)
+      setLoadingCompliance(false)
     }
-    fetchRoute()
+    fetchCompliance()
   }, [date, selectedDeviceId, reloadKey])
 
   const activeDevice = devices.find((d) => d.id === selectedDeviceId) ?? null
@@ -252,9 +251,26 @@ export default function History() {
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
           <div>
-            <h2 style={{ color: 'var(--text-primary)', fontSize: '16px', fontWeight: 700, margin: 0, letterSpacing: '-0.01em' }}>
-              Route History
-            </h2>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <h2 style={{ color: 'var(--text-primary)', fontSize: '16px', fontWeight: 700, margin: 0, letterSpacing: '-0.01em' }}>
+                Route History
+              </h2>
+              {isMobile && (
+                <button
+                  onClick={() => setStatsExpanded(!statsExpanded)}
+                  style={{
+                    background: 'var(--bg-card)', border: '1px solid var(--border)',
+                    borderRadius: '4px', width: '24px', height: '24px',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    cursor: 'pointer', color: 'var(--text-secondary)'
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ transform: statsExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                </button>
+              )}
+            </div>
             <p style={{ color: 'var(--text-muted)', fontSize: '11px', margin: '3px 0 0' }}>
               {route.length > 0 ? `${route.length} points recorded` : 'Select a date to load route'}
             </p>
@@ -379,38 +395,40 @@ export default function History() {
         </div>
 
         {/* Stats */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '10px' }}>
-          {stats.map(({ label, value, icon, accent }) => (
-            <div key={label} className="anim-fade-up" style={{
+        {statsExpanded && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '10px' }}>
+            {stats.map(({ label, value, icon, accent }) => (
+              <div key={label} className="anim-fade-up" style={{
+                background: 'var(--bg-card)', border: '1px solid var(--border)',
+                borderRadius: 'var(--radius-md)', padding: '12px 14px',
+                position: 'relative', overflow: 'hidden',
+              }}>
+                <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '2px', background: accent }} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+                  {icon}
+                  <span style={{ color: 'var(--text-muted)', fontSize: '10px', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase' }}>{label}</span>
+                </div>
+                <div style={{ color: 'var(--text-primary)', fontSize: '18px', fontWeight: 700, letterSpacing: '-0.02em' }}>{value}</div>
+              </div>
+            ))}
+            
+            {/* Checkpoint Compliance Stat */}
+            <div className="anim-fade-up" style={{
               background: 'var(--bg-card)', border: '1px solid var(--border)',
               borderRadius: 'var(--radius-md)', padding: '12px 14px',
               position: 'relative', overflow: 'hidden',
             }}>
-              <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '2px', background: accent }} />
+              <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '2px', background: '#34d399' }} />
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
-                {icon}
-                <span style={{ color: 'var(--text-muted)', fontSize: '10px', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase' }}>{label}</span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#34d399" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                <span style={{ color: 'var(--text-muted)', fontSize: '10px', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Checkpoints</span>
               </div>
-              <div style={{ color: 'var(--text-primary)', fontSize: '18px', fontWeight: 700, letterSpacing: '-0.02em' }}>{value}</div>
-            </div>
-          ))}
-          
-          {/* Checkpoint Compliance Stat */}
-          <div className="anim-fade-up" style={{
-            background: 'var(--bg-card)', border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-md)', padding: '12px 14px',
-            position: 'relative', overflow: 'hidden',
-          }}>
-            <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '2px', background: '#34d399' }} />
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#34d399" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-              <span style={{ color: 'var(--text-muted)', fontSize: '10px', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Checkpoints</span>
-            </div>
-            <div style={{ color: 'var(--text-primary)', fontSize: '18px', fontWeight: 700, letterSpacing: '-0.02em' }}>
-              {compliance.length} <span style={{ color: 'var(--text-muted)', fontSize: '12px', fontWeight: 500 }}>/ {totalCheckpoints}</span>
+              <div style={{ color: 'var(--text-primary)', fontSize: '18px', fontWeight: 700, letterSpacing: '-0.02em' }}>
+                {compliance.length} <span style={{ color: 'var(--text-muted)', fontSize: '12px', fontWeight: 500 }}>/ {totalCheckpoints}</span>
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* Map */}

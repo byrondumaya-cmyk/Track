@@ -91,21 +91,20 @@ export default function Login() {
           <div style={{ color: 'var(--accent)', fontSize: '11px', letterSpacing: '0.2em', fontWeight: 600, textTransform: 'uppercase', marginBottom: '10px' }}>
             Fleet Intelligence Platform
           </div>
-          <h1 style={{ color: 'var(--text-primary)', fontSize: isMobile ? '30px' : '40px', fontWeight: 800, lineHeight: 1.15, margin: 0, letterSpacing: '-0.02em' }}>
-            GarbageTrack<br />
-            <span style={{ color: 'var(--accent)' }}>Command</span>
+          <h1 style={{ color: 'var(--text-primary)', fontSize: isMobile ? '24px' : '32px', fontWeight: 800, lineHeight: 1.15, margin: 0, letterSpacing: '-0.02em' }}>
+            MENRO ALIAGA<br />
+            <span style={{ color: 'var(--accent)' }}>GPS TRACKER</span>
           </h1>
           <p style={{ color: 'var(--text-secondary)', fontSize: '15px', marginTop: '16px', lineHeight: 1.6, maxWidth: '380px' }}>
-            Real-time GPS monitoring, route analytics, and telemetry for the Aliaga Municipal Waste Management fleet.
+            Timely GPS monitoring, route analytics, and telemetry for the Aliaga Municipal Waste Management fleet.
           </p>
         </div>
 
         {/* Feature list */}
         <div className="anim-fade-up delay-2" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
           {[
-            { label: 'Live GPS Tracking', desc: '30s position updates via LTE' },
-            { label: 'Route History', desc: 'Full daily route replay with analytics' },
-            { label: 'System Events', desc: 'Real-time telemetry & alert log' },
+            { label: 'Live GPS Tracking', desc: 'Timely position updates via LTE' },
+            { label: 'Route History', desc: 'Full daily route replay with analytics' }
           ].map(({ label, desc }) => (
             <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
               <div style={{
@@ -176,7 +175,6 @@ export default function Login() {
                 type="email" required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="admin@lgu-aliaga.gov.ph"
                 style={{
                   width: '100%', padding: '11px 14px',
                   background: 'var(--bg-card)',
@@ -204,7 +202,6 @@ export default function Login() {
                 type="password" required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••••••"
                 style={{
                   width: '100%', padding: '11px 14px',
                   background: 'var(--bg-card)',

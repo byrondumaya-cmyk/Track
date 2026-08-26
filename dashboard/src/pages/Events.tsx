@@ -52,6 +52,29 @@ function timeSince(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString()
 }
 
+function formatPayload(payload: Record<string, unknown>): string | null {
+  if (!payload || Object.keys(payload).length === 0) return null
+  
+  const parts: string[] = []
+  
+  const lat = payload.lat ?? payload.latitude
+  const lon = payload.lon ?? payload.lng ?? payload.longitude
+  if (lat !== undefined && lon !== undefined) {
+    parts.push(`📍 ${Number(lat).toFixed(5)}, ${Number(lon).toFixed(5)}`)
+  }
+  
+  if (payload.speed !== undefined) parts.push(`⚡ ${payload.speed} km/h`)
+  if (payload.battery !== undefined) parts.push(`🔋 ${payload.battery}V`)
+  if (payload.rsrp !== undefined) parts.push(`📡 ${payload.rsrp} dBm`)
+  if (payload.message !== undefined) parts.push(String(payload.message))
+  if (payload.status !== undefined) parts.push(String(payload.status))
+  if (payload.checkpoint_name !== undefined) parts.push(String(payload.checkpoint_name))
+  
+  if (parts.length > 0) return parts.join(' · ')
+  
+  return null
+}
+
 // SVG icon for event type
 function EventIcon({ type }: { type: string }) {
   const color = getMeta(type).color
@@ -389,8 +412,11 @@ export default function Events() {
                       {meta.label}
                     </span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                      <span style={{ color: 'var(--text-secondary)', fontSize: '10px' }}>
+                        {new Date(event.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                      </span>
                       <span style={{ color: 'var(--text-muted)', fontSize: '10px', fontFamily: "'JetBrains Mono', monospace" }}>
-                        {timeSince(event.timestamp)}
+                        ({timeSince(event.timestamp)})
                       </span>
                       <button
                         onClick={() => handleDeleteOne(event.id)}
@@ -409,14 +435,14 @@ export default function Events() {
                       </button>
                     </div>
                   </div>
-                  {event.payload && Object.keys(event.payload).length > 0 && (
+                  {formatPayload(event.payload) && (
                     <div style={{
-                      color: 'var(--text-secondary)', fontSize: '11px',
-                      fontFamily: "'JetBrains Mono', monospace",
-                      background: 'rgba(0,0,0,0.2)', borderRadius: '4px',
-                      padding: '4px 8px', wordBreak: 'break-all',
+                      color: 'var(--text-secondary)', fontSize: '12px',
+                      fontFamily: "'Inter', sans-serif",
+                      background: 'rgba(0,0,0,0.05)', borderRadius: '4px',
+                      padding: '6px 8px', marginTop: '4px', border: '1px solid var(--border)'
                     }}>
-                      {JSON.stringify(event.payload)}
+                      {formatPayload(event.payload)}
                     </div>
                   )}
                 </div>

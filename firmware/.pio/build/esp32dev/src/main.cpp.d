@@ -241,21 +241,22 @@
  C:/Users/Byron\ Dumaya/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/hal/include/hal/aes_types.h \
  C:/Users/Byron\ Dumaya/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/mbedtls/mbedtls/include/mbedtls/error.h \
  C:/Users/Byron\ Dumaya/.platformio/packages/framework-arduinoespressif32/libraries/Preferences/src/Preferences.h \
+ .pio/libdeps/esp32dev/StreamDebugger/StreamDebugger.h \
  .pio/libdeps/esp32dev/TinyGSM/src/TinyGsmClient.h \
- .pio/libdeps/esp32dev/TinyGSM/src/TinyGsmClientSIM7600.h \
- .pio/libdeps/esp32dev/TinyGSM/src/TinyGsmBattery.tpp \
- .pio/libdeps/esp32dev/TinyGSM/src/TinyGsmCommon.h \
- .pio/libdeps/esp32dev/TinyGSM/src/TinyGsmCalling.tpp \
- .pio/libdeps/esp32dev/TinyGSM/src/TinyGsmGPRS.tpp \
- .pio/libdeps/esp32dev/TinyGSM/src/TinyGsmGPS.tpp \
- .pio/libdeps/esp32dev/TinyGSM/src/TinyGsmGSMLocation.tpp \
+ .pio/libdeps/esp32dev/TinyGSM/src/TinyGsmClientA7672x.h \
  .pio/libdeps/esp32dev/TinyGSM/src/TinyGsmModem.tpp \
- .pio/libdeps/esp32dev/TinyGSM/src/TinyGsmSMS.tpp \
+ .pio/libdeps/esp32dev/TinyGSM/src/TinyGsmCommon.h \
  .pio/libdeps/esp32dev/TinyGSM/src/TinyGsmTCP.tpp \
  .pio/libdeps/esp32dev/TinyGSM/src/TinyGsmFifo.h \
- .pio/libdeps/esp32dev/TinyGSM/src/TinyGsmTemperature.tpp \
+ .pio/libdeps/esp32dev/TinyGSM/src/TinyGsmSSL.tpp \
+ .pio/libdeps/esp32dev/TinyGSM/src/TinyGsmGPRS.tpp \
+ .pio/libdeps/esp32dev/TinyGSM/src/TinyGsmCalling.tpp \
+ .pio/libdeps/esp32dev/TinyGSM/src/TinyGsmSMS.tpp \
+ .pio/libdeps/esp32dev/TinyGSM/src/TinyGsmGSMLocation.tpp \
  .pio/libdeps/esp32dev/TinyGSM/src/TinyGsmTime.tpp \
  .pio/libdeps/esp32dev/TinyGSM/src/TinyGsmNTP.tpp \
+ .pio/libdeps/esp32dev/TinyGSM/src/TinyGsmBattery.tpp \
+ .pio/libdeps/esp32dev/TinyGSM/src/TinyGsmTemperature.tpp \
  C:/Users/Byron\ Dumaya/.platformio/packages/framework-arduinoespressif32/libraries/WebServer/src/WebServer.h \
  C:/Users/Byron\ Dumaya/.platformio/packages/framework-arduinoespressif32/libraries/WebServer/src/HTTP_Method.h \
  C:/Users/Byron\ Dumaya/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/nghttp/port/include/http_parser.h \

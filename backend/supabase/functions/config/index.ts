@@ -23,7 +23,7 @@ Deno.serve(async (req) => {
   // Validate device
   const { data: device, error: deviceError } = await supabase
     .from('devices')
-    .select('id, api_key, is_active')
+    .select('id, api_key, is_active, recording_interval_s')
     .eq('device_id', deviceIdHeader)
     .single()
 
@@ -36,7 +36,7 @@ Deno.serve(async (req) => {
 
   // Return configuration details (could be fetched from a config table in the future)
   const config = {
-    interval_moving_sec: 15,
+    interval_moving_sec: device.recording_interval_s || 5,
     interval_stopped_sec: 60,
     interval_low_battery_sec: 300,
     gps_accuracy_threshold_hdop: 2.5,

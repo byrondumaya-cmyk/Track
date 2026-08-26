@@ -21,12 +21,6 @@ const EventsIcon = () => (
     <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
   </svg>
 )
-const CheckpointIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="10"/>
-    <circle cx="12" cy="12" r="3"/>
-  </svg>
-)
 const DeviceConfigIcon = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
     <path d="M5 12.55a11 11 0 0 1 14.08 0"/>
@@ -46,32 +40,28 @@ const LogoutIcon = () => (
 const navigation = [
   { name: 'Live Map',      href: '/',             Icon: MapIcon,          desc: 'Real-time tracking' },
   { name: 'Route History', href: '/history',       Icon: HistoryIcon,      desc: 'Daily route replay' },
-  { name: 'Checkpoints',  href: '/checkpoints',   Icon: CheckpointIcon,   desc: 'Route compliance' },
   { name: 'Event Log',    href: '/events',        Icon: EventsIcon,       desc: 'System telemetry' },
   { name: 'Device Config',href: '/device-config', Icon: DeviceConfigIcon, desc: 'WiFi & OTA settings' },
 ]
 
 export default function Layout() {
   const location = useLocation()
-  const [isOnline, setIsOnline] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [theme, setTheme] = useState(document.documentElement.getAttribute('data-theme') || 'light')
 
   useEffect(() => {
-    // Check initial status
-    supabase.from('device_status').select('status').limit(1).single().then(({ data }) => {
-      setIsOnline(data?.status === 'online')
-    })
-    
-    // Listen for live connection changes
-    const channel = supabase.channel('sidebar_status')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'device_status' }, (payload) => {
-        // @ts-ignore
-        setIsOnline(payload.new?.status === 'online')
-      })
-      .subscribe()
+    document.documentElement.setAttribute('data-theme', theme)
+    localStorage.setItem('theme', theme)
+  }, [theme])
 
-    return () => { supabase.removeChannel(channel) }
+  const toggleTheme = () => {
+    setTheme(t => t === 'light' ? 'dark' : 'light')
+  }
+
+  useEffect(() => {
+  // We preserve the offline status logic in other components (LiveMap)
+  // but remove it from the Layout UI as requested.
   }, [])
 
   useEffect(() => {
@@ -126,7 +116,7 @@ export default function Layout() {
               </svg>
             </div>
             <div>
-              <div style={{ color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700, letterSpacing: '-0.01em' }}>TrackLocator</div>
+              <div style={{ color: 'var(--text-primary)', fontSize: '12px', fontWeight: 700, letterSpacing: '-0.01em' }}>MENRO ALIAGA GPS TRACKER</div>
               <div style={{ color: 'var(--text-muted)', fontSize: '10px', letterSpacing: '0.05em' }}>COMMAND CENTER</div>
             </div>
           </div>
@@ -190,7 +180,7 @@ export default function Layout() {
           })}
         </nav>
 
-        {/* System status */}
+        {/* Theme Toggle */}
         <div style={{
           margin: '0 12px 12px',
           background: 'var(--bg-card)',
@@ -199,20 +189,26 @@ export default function Layout() {
           padding: '12px 14px',
         }}>
           <div style={{ color: 'var(--text-muted)', fontSize: '10px', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: '8px' }}>
-            Fleet Status
+            Appearance
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <div style={{ position: 'relative', display: 'flex' }}>
-              <div style={{
-                width: '8px', height: '8px', borderRadius: '50%',
-                background: isOnline ? 'var(--accent)' : '#ef4444',
-                boxShadow: isOnline ? '0 0 6px var(--accent)' : '0 0 6px #ef4444',
-              }} className={isOnline ? "anim-blink" : ""} />
-            </div>
-            <span style={{ color: isOnline ? 'var(--text-secondary)' : '#ef4444', fontSize: '12px' }}>
-              {isOnline ? 'Tracker Online' : 'Tracker Offline'}
+          <button 
+            onClick={toggleTheme}
+            style={{ 
+              display: 'flex', alignItems: 'center', gap: '8px', 
+              background: 'transparent', border: 'none', cursor: 'pointer',
+              color: 'var(--text-secondary)', fontSize: '12px', padding: 0, width: '100%',
+              textAlign: 'left'
+            }}
+          >
+            {theme === 'light' ? (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+            )}
+            <span style={{flex: 1}}>
+              {theme === 'light' ? 'Switch to Dark Mode' : 'Switch to Light Mode'}
             </span>
-          </div>
+          </button>
         </div>
 
         {/* Logout */}
@@ -285,19 +281,20 @@ export default function Layout() {
                 <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
               </svg>
             </div>
-            <span style={{ color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700 }}>TrackLocator</span>
+            <span style={{ color: 'var(--text-primary)', fontSize: '12px', fontWeight: 700 }}>MENRO ALIAGA GPS TRACKER</span>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <div style={{
-              width: '8px', height: '8px', borderRadius: '50%',
-              background: isOnline ? 'var(--accent)' : '#ef4444',
-              boxShadow: isOnline ? '0 0 6px var(--accent)' : '0 0 6px #ef4444',
-            }} className={isOnline ? 'anim-blink' : ''} />
-            <span style={{ color: isOnline ? 'var(--text-secondary)' : '#ef4444', fontSize: '10px', fontWeight: 600 }}>
-              {isOnline ? 'ONLINE' : 'OFFLINE'}
-            </span>
-          </div>
+          <button onClick={toggleTheme} style={{ 
+            display: 'flex', alignItems: 'center', gap: '6px',
+            background: 'transparent', border: 'none', cursor: 'pointer',
+            color: 'var(--text-secondary)'
+          }}>
+            {theme === 'light' ? (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+            ) : (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+            )}
+          </button>
         </div>
       )}
 

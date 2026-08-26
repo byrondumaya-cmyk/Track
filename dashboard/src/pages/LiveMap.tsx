@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet'
+import { MapContainer, TileLayer, Marker, Popup, useMap, CircleMarker, Polyline } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import { supabase } from '../lib/supabase'
 import L from 'leaflet'
+import { useRouteHistory } from '../hooks/useRouteHistory'
 
 // Fix leaflet default icon
 delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl
@@ -81,22 +82,21 @@ function MetricCard({ icon, label, value, sub, accent }: {
   )
 }
 
-const BatteryIcon = ({ pct }: { pct: number }) => {
-  const color = pct > 60 ? '#00d4aa' : pct > 30 ? '#f59e0b' : '#ef4444'
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="1" y="6" width="18" height="12" rx="2"/>
-      <path d="M23 13v-2"/>
-      <rect x="3" y="8" width={Math.round(14 * pct / 100)} height="8" fill={color} stroke="none" rx="1"/>
-    </svg>
-  )
-}
+
 
 export default function LiveMap() {
   const [device, setDevice] = useState<DeviceStatus | null>(null)
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
   const [elapsed, setElapsed] = useState('—')
+  const [isMobile, setIsMobile] = useState(false)
+  const [metricsExpanded, setMetricsExpanded] = useState(true)
   const defaultCenter: [number, number] = [15.4912, 120.8321]
+  
+  const today = new Date().toISOString().split('T')[0]
+  const { route } = useRouteHistory(today, device?.device_id || '')
+  
+  // Historical positions from database
+  const historyPositions: [number, number][] = route.map(r => [r.lat, r.lon])
 
   useEffect(() => {
     const fetch = async () => {
@@ -111,7 +111,19 @@ export default function LiveMap() {
       })
       .subscribe()
 
-    return () => { supabase.removeChannel(channel) }
+    const updateViewport = () => {
+      const mobile = window.innerWidth <= 900
+      setIsMobile(mobile)
+      if (!mobile) setMetricsExpanded(true)
+      else setMetricsExpanded(false)
+    }
+    updateViewport()
+    window.addEventListener('resize', updateViewport)
+
+    return () => { 
+      supabase.removeChannel(channel)
+      window.removeEventListener('resize', updateViewport)
+    }
   }, [])
 
   // Update elapsed time every second
@@ -128,8 +140,6 @@ export default function LiveMap() {
   }, [lastUpdate])
 
   const isOnline = Boolean(device?.last_seen && (Date.now() - new Date(device.last_seen).getTime() < 3 * 60 * 1000))
-  const batPct = device?.battery_pct ?? 0
-  const signalStrength = !device?.rssi_dbm ? '—' : device.rssi_dbm > -70 ? 'Strong' : device.rssi_dbm > -85 ? 'Good' : 'Weak'
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg-base)' }}>
@@ -143,9 +153,26 @@ export default function LiveMap() {
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
           <div>
-            <h2 style={{ color: 'var(--text-primary)', fontSize: '16px', fontWeight: 700, margin: 0, letterSpacing: '-0.01em' }}>
-              Live Tracking
-            </h2>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <h2 style={{ color: 'var(--text-primary)', fontSize: '16px', fontWeight: 700, margin: 0, letterSpacing: '-0.01em' }}>
+                Live Tracking
+              </h2>
+              {isMobile && (
+                <button
+                  onClick={() => setMetricsExpanded(!metricsExpanded)}
+                  style={{
+                    background: 'var(--bg-card)', border: '1px solid var(--border)',
+                    borderRadius: '4px', width: '24px', height: '24px',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    cursor: 'pointer', color: 'var(--text-secondary)'
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ transform: metricsExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                </button>
+              )}
+            </div>
             <p style={{ color: 'var(--text-muted)', fontSize: '11px', margin: '3px 0 0' }}>
               {lastUpdate ? `Last update: ${elapsed}` : 'Waiting for tracker...'}
             </p>
@@ -172,43 +199,31 @@ export default function LiveMap() {
         </div>
 
         {/* Metric cards */}
-        {device ? (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px' }}>
-            <MetricCard
-              icon={<BatteryIcon pct={batPct} />}
-              label="Battery"
-              value={`${batPct}%`}
-              sub={batPct > 60 ? 'Healthy' : batPct > 30 ? 'Low' : 'Critical'}
-              accent={batPct > 60 ? '#00d4aa' : batPct > 30 ? '#f59e0b' : '#ef4444'}
-            />
-            <MetricCard
-              icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>}
-              label="Speed"
-              value={`${device.last_speed?.toFixed(1) ?? '0'}`}
-              sub="km/h"
-              accent="#3b82f6"
-            />
-            <MetricCard
-              icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1.46 5a11 11 0 0 1 21.08 0"/><path d="M5 8.3a7 7 0 0 1 14 0"/><path d="M8.53 11.6a3 3 0 0 1 6.95 0"/><circle cx="12" cy="15" r="1"/></svg>}
-              label="LTE Signal"
-              value={signalStrength}
-              sub={device.rssi_dbm ? `${device.rssi_dbm} dBm` : 'No data'}
-              accent="#a78bfa"
-            />
-            <MetricCard
-              icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={device.gps_fix ? '#00d4aa' : '#f59e0b'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>}
-              label="GPS Fix"
-              value={device.gps_fix ? 'Fixed' : 'Searching'}
-              sub={`${device.last_lat?.toFixed(5)}, ${device.last_lon?.toFixed(5)}`}
-              accent={device.gps_fix ? '#00d4aa' : '#f59e0b'}
-            />
-          </div>
-        ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px' }}>
-            {[1,2,3,4].map(i => (
-              <div key={i} className="skeleton" style={{ height: '80px' }} />
-            ))}
-          </div>
+        {metricsExpanded && (
+          device ? (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px' }}>
+              <MetricCard
+                icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>}
+                label="Speed"
+                value={`${device.last_speed?.toFixed(1) ?? '0'}`}
+                sub="km/h"
+                accent="#3b82f6"
+              />
+              <MetricCard
+                icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={device.gps_fix ? '#00d4aa' : '#f59e0b'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>}
+                label="GPS Fix"
+                value={device.gps_fix ? 'Fixed' : 'Searching'}
+                sub={`${device.last_lat?.toFixed(5)}, ${device.last_lon?.toFixed(5)}`}
+                accent={device.gps_fix ? '#00d4aa' : '#f59e0b'}
+              />
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px' }}>
+              {[1,2].map(i => (
+                <div key={i} className="skeleton" style={{ height: '80px' }} />
+              ))}
+            </div>
+          )
         )}
       </div>
 
@@ -227,6 +242,17 @@ export default function LiveMap() {
           {device?.last_lat && device?.last_lon && (
             <>
               <MapFlyTo lat={device.last_lat} lon={device.last_lon} />
+              {historyPositions.length > 0 && (
+                <Polyline positions={historyPositions} pathOptions={{ color: 'var(--accent)', weight: 3, opacity: 0.6 }} />
+              )}
+              {historyPositions.map((pos, idx) => (
+                <CircleMarker 
+                  key={idx} 
+                  center={pos} 
+                  radius={4} 
+                  pathOptions={{ color: 'var(--accent)', fillColor: 'var(--bg-card)', fillOpacity: 1, weight: 2 }} 
+                />
+              ))}
               <Marker position={[device.last_lat, device.last_lon]} icon={truckIcon}>
                 <Popup>
                   <div style={{ fontFamily: "'Inter', sans-serif", minWidth: '180px', background: 'var(--bg-card)', margin: '-14px -20px', padding: '14px 16px' }}>
@@ -234,7 +260,6 @@ export default function LiveMap() {
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       {[
                         ['Speed', `${device.last_speed?.toFixed(1)} km/h`],
-                        ['Battery', `${device.battery_pct}%`],
                         ['GPS Fix', device.gps_fix ? 'Active' : 'Searching'],
                         ['Last Seen', new Date(device.last_seen).toLocaleTimeString()],
                       ].map(([k, v]) => (

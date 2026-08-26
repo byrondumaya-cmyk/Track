@@ -36,16 +36,18 @@
 
 // ─────────────────────────────────────────────────────────────
 // Hardware Pins — LILYGO T-Call A7670E
+// Verified against official LilyGO reference:
+// github.com/ittipu/IoT_Bhai_Youtube_Channel/.../3_Getting_GPS...
 // ─────────────────────────────────────────────────────────────
-#define MODEM_TX 27
-#define MODEM_RX 26
-#define MODEM_PWRKEY 4
-#define MODEM_DTR 32
-#define MODEM_RI 33
-#define MODEM_FLIGHT 25
-#define MODEM_STATUS 34
-#define BAT_ADC 35
-#define LED_PIN 13 // Status indicator LED
+#define MODEM_TX      26  // ESP32 → Modem (Serial1 TX)
+#define MODEM_RX      25  // Modem → ESP32 (Serial1 RX)
+#define MODEM_PWRKEY   4  // Active-high 100ms pulse to power on
+#define MODEM_RESET   27  // Active-LOW reset; pulse to recover from bad state
+#define MODEM_DTR     14  // Data Terminal Ready — keep LOW to prevent sleep
+#define MODEM_RI      13  // Ring Indicator (input)
+#define BOARD_LED     12  // Onboard LED (HIGH = on)
+#define BAT_ADC       35  // Battery voltage ADC
+#define LED_PIN       12  // Status indicator LED (same as BOARD_LED)
 
 // ─────────────────────────────────────────────────────────────
 // Service & Diagnostics Access Point

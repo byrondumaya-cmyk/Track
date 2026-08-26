@@ -19,6 +19,7 @@ interface Device {
   apn: string | null
   sim_number: string | null
   sim_carrier: string | null
+  recording_interval_s: number
 }
 
 interface DeviceStatus {
@@ -93,7 +94,7 @@ export default function DeviceConfig() {
   const [saving, setSaving]             = useState<string | null>(null)  // deviceId being saved
   const [deleting, setDeleting]         = useState<string | null>(null)
   const [showPassFor, setShowPassFor]   = useState<Record<string, boolean>>({})
-  const [simForm, setSimForm]           = useState<Record<string, { apn: string; sim_number: string; sim_carrier: string; open: boolean }>>({}) 
+  const [simForm, setSimForm]           = useState<Record<string, { apn: string; sim_number: string; sim_carrier: string; recording_interval_s: number; open: boolean }>>({}) 
   const [savingSim, setSavingSim]       = useState<string | null>(null)
 
   // Add-network form state per device
@@ -121,7 +122,7 @@ export default function DeviceConfig() {
   const fetchDevices = async () => {
     const { data } = await supabase
       .from('devices')
-      .select('id, device_id, name, is_active, wifi_networks, apn, sim_number, sim_carrier')
+      .select('id, device_id, name, is_active, wifi_networks, apn, sim_number, sim_carrier, recording_interval_s')
       .order('name')
     if (data) setDevices(data as Device[])
   }
@@ -150,6 +151,7 @@ export default function DeviceConfig() {
         apn: device.apn ?? 'internet',
         sim_number: device.sim_number ?? '',
         sim_carrier: device.sim_carrier ?? 'Smart PH',
+        recording_interval_s: device.recording_interval_s ?? 5,
         open: true,
       },
     }))
@@ -168,6 +170,7 @@ export default function DeviceConfig() {
         apn: form.apn.trim() || 'internet',
         sim_number: form.sim_number.trim() || null,
         sim_carrier: form.sim_carrier.trim() || null,
+        recording_interval_s: Number(form.recording_interval_s) || 5,
       })
       .eq('id', device.id)
     if (!error) {
@@ -405,6 +408,23 @@ export default function DeviceConfig() {
                             />
                           </div>
                         ))}
+                        {/* Recording Interval */}
+                        <div style={{ marginBottom: '8px' }}>
+                          <label style={{ color: 'var(--text-muted)', fontSize: '10px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', display: 'block', marginBottom: '4px' }}>GPS Recording Interval (Seconds)</label>
+                          <input
+                            type="number"
+                            min="5"
+                            placeholder="e.g. 5"
+                            value={sf.recording_interval_s ?? 5}
+                            onChange={e => setSimForm(f => ({ ...f, [device.id]: { ...f[device.id], recording_interval_s: parseInt(e.target.value, 10) } }))}
+                            style={{
+                              width: '100%', padding: '7px 10px', boxSizing: 'border-box',
+                              background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                              borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px',
+                              outline: 'none', fontFamily: "'JetBrains Mono', monospace",
+                            }}
+                          />
+                        </div>
                         <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
                           <button
                             onClick={() => handleSaveSim(device)}
@@ -446,7 +466,7 @@ export default function DeviceConfig() {
                             )}
                           </div>
                           <div style={{ color: 'var(--text-muted)', fontSize: '11px', marginTop: '2px', fontFamily: "'JetBrains Mono', monospace" }}>
-                            APN: {device.apn ?? 'internet'}
+                            APN: {device.apn ?? 'internet'} • Interval: {device.recording_interval_s ?? 5}s
                           </div>
                         </div>
                         <button
