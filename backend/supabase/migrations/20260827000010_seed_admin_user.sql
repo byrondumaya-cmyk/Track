@@ -39,6 +39,7 @@ BEGIN
     INSERT INTO auth.identities (
       id, 
       user_id, 
+      provider_id,
       identity_data, 
       provider, 
       last_sign_in_at, 
@@ -47,6 +48,7 @@ BEGIN
     ) VALUES (
       gen_random_uuid(), 
       uid, 
+      uid::text,
       format('{"sub":"%s","email":"%s"}', uid::text, user_email)::jsonb, 
       'email', 
       now(), 
