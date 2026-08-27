@@ -247,7 +247,7 @@ export default function Layout() {
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0,
           height: '58px',
-          background: 'rgba(10, 15, 30, 0.94)',
+          background: 'var(--bg-surface)',
           backdropFilter: 'blur(10px)',
           borderBottom: '1px solid var(--border)',
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -304,7 +304,7 @@ export default function Layout() {
           <div
             onClick={() => setMobileNavOpen(false)}
             style={{
-              position: 'fixed', inset: 0, background: 'rgba(2, 6, 16, 0.66)', zIndex: 1200,
+              position: 'fixed', inset: 0, background: 'rgba(0, 0, 0, 0.5)', zIndex: 1200,
             }}
           />
           <aside style={{
