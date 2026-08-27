@@ -48,7 +48,7 @@ export default function Layout() {
   const location = useLocation()
   const [isMobile, setIsMobile] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
-  const [theme, setTheme] = useState(document.documentElement.getAttribute('data-theme') || 'light')
+  const [theme, setTheme] = useState(localStorage.getItem('theme') || 'light')
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
