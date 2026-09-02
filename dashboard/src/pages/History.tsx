@@ -56,12 +56,11 @@ export default function History() {
   const [changingTracking, setChangingTracking] = useState(false)
   const [deletingHistory, setDeletingHistory] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
-  const [loadingCompliance, setLoadingCompliance] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
   const [statsExpanded, setStatsExpanded] = useState(true)
   
   const { route, loadingRoute } = useRouteHistory(date, selectedDeviceId, reloadKey)
-  const loading = loadingRoute || loadingCompliance
+  const loading = loadingRoute
 
   const defaultCenter: [number, number] = [15.4912, 120.8321]
 
