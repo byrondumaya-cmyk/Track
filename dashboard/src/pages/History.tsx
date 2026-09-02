@@ -390,7 +390,14 @@ export default function History() {
                       center={pos}
                       radius={4}
                       pathOptions={{ color: '#00d4aa', fillColor: 'var(--bg-card)', fillOpacity: 1, weight: 2 }}
-                    />
+                    >
+                      <Popup>
+                        <div style={{ fontFamily: 'Inter,sans-serif', color: 'var(--text-primary)', fontSize: '12px' }}>
+                          <strong>{new Date(route[idx].timestamp).toLocaleTimeString()}</strong><br />
+                          Speed: {route[idx].speed_kmh?.toFixed(1) || '0'} km/h
+                        </div>
+                      </Popup>
+                    </CircleMarker>
                   ))}
                   <Marker position={positions[0]} icon={makePin('#3b82f6', 'A')}>
                     <Popup><div style={{ fontFamily: 'Inter,sans-serif', color: 'var(--text-primary)', fontSize: '12px' }}><strong>Start</strong><br />{new Date(route[0].timestamp).toLocaleTimeString()}</div></Popup>
