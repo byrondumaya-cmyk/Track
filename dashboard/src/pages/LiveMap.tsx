@@ -4,6 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase } from '../lib/supabase'
 import L from 'leaflet'
 import { useRouteHistory } from '../hooks/useRouteHistory'
+import { reverseGeocode } from '../lib/geocode'
 
 // Fix leaflet default icon
 delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl
@@ -94,6 +95,13 @@ export default function LiveMap() {
   
   const today = new Date().toISOString().split('T')[0]
   const { route } = useRouteHistory(today, device?.device_id || '')
+  
+  const [locationLabel, setLocationLabel] = useState('Loading...')
+  useEffect(() => {
+    if (device?.last_lat && device?.last_lon) {
+      reverseGeocode(device.last_lat, device.last_lon).then(setLocationLabel)
+    }
+  }, [device?.last_lat, device?.last_lon])
   
   // Historical positions from database
   const historyPositions: [number, number][] = route.map(r => [r.lat, r.lon])
@@ -245,14 +253,27 @@ export default function LiveMap() {
               {historyPositions.length > 0 && (
                 <Polyline positions={historyPositions} pathOptions={{ color: 'var(--accent)', weight: 3, opacity: 0.6 }} />
               )}
-              {historyPositions.map((pos, idx) => (
-                <CircleMarker 
-                  key={idx} 
-                  center={pos} 
-                  radius={4} 
-                  pathOptions={{ color: 'var(--accent)', fillColor: 'var(--bg-card)', fillOpacity: 1, weight: 2 }} 
-                />
-              ))}
+              {historyPositions.map((pos, idx) => {
+                const rec = route[idx]
+                return (
+                  <CircleMarker 
+                    key={idx} 
+                    center={pos} 
+                    radius={4} 
+                    pathOptions={{ color: 'var(--accent)', fillColor: 'var(--bg-card)', fillOpacity: 1, weight: 2 }} 
+                  >
+                    <Popup>
+                      <div style={{ fontFamily: 'Inter,sans-serif', color: 'var(--text-primary)', fontSize: '12px', minWidth: '160px' }}>
+                        <strong>{new Date(rec.timestamp).toLocaleTimeString()}</strong><br />
+                        Speed: {rec.speed_kmh?.toFixed(1) || '0'} km/h<br />
+                        <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                          {rec.lat.toFixed(6)}, {rec.lon.toFixed(6)}
+                        </span>
+                      </div>
+                    </Popup>
+                  </CircleMarker>
+                )
+              })}
               <Marker position={[device.last_lat, device.last_lon]} icon={truckIcon}>
                 <Popup>
                   <div style={{ fontFamily: "'Inter', sans-serif", minWidth: '180px', background: 'var(--bg-card)', margin: '-14px -20px', padding: '14px 16px' }}>
@@ -260,6 +281,8 @@ export default function LiveMap() {
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       {[
                         ['Speed', `${device.last_speed?.toFixed(1)} km/h`],
+                        ['Location', locationLabel],
+                        ['Coordinates', `${device.last_lat.toFixed(6)}, ${device.last_lon.toFixed(6)}`],
                         ['GPS Fix', device.gps_fix ? 'Active' : 'Searching'],
                         ['Last Seen', new Date(device.last_seen).toLocaleTimeString()],
                       ].map(([k, v]) => (

@@ -1,0 +1,28 @@
+// ─────────────────────────────────────────────────────────────
+// Reverse Geocoding — Nominatim (OpenStreetMap, free, no key)
+// Cached by rounded coord (3 dp ≈ 111m) to minimise API calls.
+// ─────────────────────────────────────────────────────────────
+const geocodeCache = new Map<string, string>()
+
+export async function reverseGeocode(lat: number, lon: number): Promise<string> {
+  const key = `${lat.toFixed(3)},${lon.toFixed(3)}`
+  if (geocodeCache.has(key)) return geocodeCache.get(key)!
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&zoom=14`,
+      { headers: { 'User-Agent': 'GarbageTrackDashboard/1.0' } }
+    )
+    if (!res.ok) throw new Error('Geocode failed')
+    const data = await res.json()
+    const addr = data.address ?? {}
+    const place  = addr.village ?? addr.town ?? addr.city_district ?? addr.city ?? addr.county ?? ''
+    const region = addr.state ?? addr.province ?? ''
+    const result = [place, region].filter(Boolean).join(', ') || 'Unknown location'
+    geocodeCache.set(key, result)
+    return result
+  } catch {
+    const fallback = `${lat.toFixed(3)}°N, ${lon.toFixed(3)}°E`
+    geocodeCache.set(key, fallback)
+    return fallback
+  }
+}

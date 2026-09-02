@@ -17,9 +17,29 @@ const makePin = (color: string, label: string) => L.divIcon({
   className: '', iconSize: [28, 28], iconAnchor: [14, 14],
 })
 
+import { reverseGeocode } from '../lib/geocode'
+
 interface GpsRecord {
   id: number; lat: number; lon: number
   speed_kmh: number; battery_pct: number; timestamp: string
+}
+
+function GeocodedPopup({ record }: { record: GpsRecord }) {
+  const [place, setPlace] = useState('Loading location...')
+  useEffect(() => {
+    reverseGeocode(record.lat, record.lon).then(setPlace)
+  }, [record.lat, record.lon])
+  
+  return (
+    <div style={{ fontFamily: 'Inter,sans-serif', color: 'var(--text-primary)', fontSize: '12px', minWidth: '160px' }}>
+      <strong>{new Date(record.timestamp).toLocaleTimeString()}</strong><br />
+      Speed: {record.speed_kmh?.toFixed(1) || '0'} km/h<br />
+      Location: {place}<br />
+      <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+        {record.lat.toFixed(6)}, {record.lon.toFixed(6)}
+      </span>
+    </div>
+  )
 }
 
 
@@ -392,10 +412,7 @@ export default function History() {
                       pathOptions={{ color: '#00d4aa', fillColor: 'var(--bg-card)', fillOpacity: 1, weight: 2 }}
                     >
                       <Popup>
-                        <div style={{ fontFamily: 'Inter,sans-serif', color: 'var(--text-primary)', fontSize: '12px' }}>
-                          <strong>{new Date(route[idx].timestamp).toLocaleTimeString()}</strong><br />
-                          Speed: {route[idx].speed_kmh?.toFixed(1) || '0'} km/h
-                        </div>
+                        <GeocodedPopup record={route[idx]} />
                       </Popup>
                     </CircleMarker>
                   ))}
