@@ -22,12 +22,160 @@ const EVENT_META: Record<string, { color: string; bg: string; label: string }> =
   lte_disconnected:  { color: '#ef4444', bg: 'rgba(239,68,68,0.08)',   label: 'LTE Down' },
   battery_low:       { color: '#f59e0b', bg: 'rgba(245,158,11,0.08)',  label: 'Bat. Low' },
   upload_fail:       { color: '#ef4444', bg: 'rgba(239,68,68,0.08)',   label: 'Upload Fail' },
-  upload_success:    { color: '#00d4aa', bg: 'rgba(0,212,170,0.08)',   label: 'Uploaded' },
+  upload_success:    { color: '#00d4aa', bg: 'rgba(0,212,170,0.08)',   label: 'Location Saved' },
   checkpoint_visit:  { color: '#22c55e', bg: 'rgba(34,197,94,0.08)',   label: 'Checkpoint' },
+  wifi_provisioned:  { color: '#60a5fa', bg: 'rgba(96,165,250,0.08)',  label: 'Wi-Fi Set Up' },
 }
 const DEFAULT_META = { color: '#64748b', bg: 'rgba(100,116,139,0.08)', label: 'Event' }
 
 function getMeta(type: string) { return EVENT_META[type] ?? DEFAULT_META }
+
+// ─────────────────────────────────────────────────────────────
+// Reverse Geocoding — Nominatim (OpenStreetMap, free, no key)
+// Cached by rounded coord (3 dp ≈ 111m) to minimise API calls.
+// ─────────────────────────────────────────────────────────────
+const geocodeCache = new Map<string, string>()
+
+async function reverseGeocode(lat: number, lon: number): Promise<string> {
+  const key = `${lat.toFixed(3)},${lon.toFixed(3)}`
+  if (geocodeCache.has(key)) return geocodeCache.get(key)!
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&zoom=14`,
+      { headers: { 'User-Agent': 'GarbageTrackDashboard/1.0' } }
+    )
+    if (!res.ok) throw new Error('Geocode failed')
+    const data = await res.json()
+    const addr = data.address ?? {}
+    const place  = addr.village ?? addr.town ?? addr.city_district ?? addr.city ?? addr.county ?? ''
+    const region = addr.state ?? addr.province ?? ''
+    const result = [place, region].filter(Boolean).join(', ') || 'Unknown location'
+    geocodeCache.set(key, result)
+    return result
+  } catch {
+    const fallback = `${lat.toFixed(3)}°N, ${lon.toFixed(3)}°E`
+    geocodeCache.set(key, fallback)
+    return fallback
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Human-readable event summaries
+// ─────────────────────────────────────────────────────────────
+interface EventSummary { line1: string; line2?: string }
+
+function formatEventSummary(
+  event_type: string,
+  payload: Record<string, unknown>
+): EventSummary | null {
+  if (!payload || Object.keys(payload).length === 0) return null
+
+  switch (event_type) {
+    case 'upload_success': {
+      const accepted  = Number(payload.accepted ?? 0)
+      const fixCount  = Number(payload.gps_fix_count ?? 0)
+      const wifiCount = Number(payload.wifi_count ?? 0)
+      const lteCount  = Number(payload.lte_count ?? 0)
+      const latest    = payload.latest_record as Record<string, unknown> | undefined
+      const via = wifiCount > 0 && lteCount === 0 ? 'Wi-Fi'
+                : lteCount > 0 && wifiCount === 0 ? 'LTE' : 'Wi-Fi + LTE'
+      const gpsLabel = fixCount === accepted ? 'GPS locked'
+                     : fixCount === 0        ? 'No GPS fix'
+                     : `${fixCount}/${accepted} with GPS`
+      const line1 = `📦 ${accepted} location${accepted !== 1 ? 's' : ''} saved via ${via}  ·  ${gpsLabel}`
+      if (latest) {
+        const speed   = latest.speed_kmh !== undefined ? `${Number(latest.speed_kmh).toFixed(0)} km/h` : null
+        const battery = latest.battery_pct !== undefined ? `🔋 ${latest.battery_pct}%` : null
+        const lat     = Number(latest.lat ?? 0)
+        const lon     = Number(latest.lon ?? 0)
+        const locFallback = lat && lon ? `📍 ${lat.toFixed(3)}°N, ${lon.toFixed(3)}°E` : null
+        const extras  = [speed, battery].filter(Boolean).join('  ·  ')
+        const line2   = [locFallback, extras].filter(Boolean).join('  ·  ')
+        return { line1, line2: line2 || undefined }
+      }
+      return { line1 }
+    }
+    case 'upload_fail': {
+      const attempted = payload.attempted ?? payload.count ?? '?'
+      const detail    = typeof payload.detail === 'string' ? payload.detail : ''
+      return {
+        line1: `⚠️ Failed to save ${attempted} location${Number(attempted) !== 1 ? 's' : ''}`,
+        line2: detail ? `Reason: ${detail}` : undefined,
+      }
+    }
+    case 'lte_connected': {
+      const operator = typeof payload.operator === 'string' ? payload.operator : ''
+      const rssi     = payload.rssi ?? payload.rsrp
+      const parts    = [operator ? `Connected to ${operator}` : 'LTE connected', rssi !== undefined ? `Signal: ${rssi} dBm` : null].filter(Boolean)
+      return { line1: `📶 ${parts.join('  ·  ')}` }
+    }
+    case 'lte_disconnected':
+      return { line1: '📴 LTE signal lost — switching to offline mode' }
+    case 'battery_low': {
+      const pct = payload.battery_pct ?? payload.battery ?? payload.level
+      return { line1: `🔋 Battery low${pct !== undefined ? `: ${pct}%` : ''}`, line2: 'Please charge or check the solar panel soon' }
+    }
+    case 'boot': {
+      const fw = payload.fw_version ?? payload.firmware
+      return { line1: `🚀 Device started${fw ? `  ·  Firmware ${fw}` : ''}` }
+    }
+    case 'gps_fix': {
+      const sats = payload.satellites ?? payload.sats
+      return { line1: `📡 GPS signal acquired${sats !== undefined ? `  ·  ${sats} satellites` : ''}` }
+    }
+    case 'wifi_provisioned': {
+      const ssid = typeof payload.ssid === 'string' ? payload.ssid : ''
+      return { line1: `📶 Wi-Fi configured${ssid ? `: "${ssid}"` : ''}`, line2: 'Device will connect automatically on next boot' }
+    }
+    case 'checkpoint_visit': {
+      const name = typeof payload.checkpoint_name === 'string' ? payload.checkpoint_name : ''
+      return { line1: `📍 Arrived at checkpoint${name ? `: ${name}` : ''}` }
+    }
+    default: {
+      const parts: string[] = []
+      for (const [k, v] of Object.entries(payload)) {
+        if (typeof v === 'object' || k === 'location') continue
+        parts.push(`${k.replace(/_/g, ' ')}: ${v}`)
+      }
+      return parts.length > 0 ? { line1: parts.slice(0, 4).join('  ·  ') } : null
+    }
+  }
+}
+
+// Renders summary lines; swaps placeholder coords for a geocoded place name asynchronously
+function EventSummaryView({ event }: { event: SystemEvent }) {
+  const summary = formatEventSummary(event.event_type, event.payload)
+  const [locationLabel, setLocationLabel] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (event.event_type !== 'upload_success') return
+    const latest = event.payload.latest_record as Record<string, unknown> | undefined
+    if (!latest) return
+    const lat = Number(latest.lat ?? 0)
+    const lon = Number(latest.lon ?? 0)
+    if (!lat || !lon) return
+    reverseGeocode(lat, lon).then(place => setLocationLabel(`📍 Near ${place}`))
+  }, [event])
+
+  if (!summary) return null
+
+  let line2 = summary.line2
+  if (event.event_type === 'upload_success' && locationLabel && line2) {
+    line2 = line2.replace(/📍 \S+°N, \S+°E/, locationLabel)
+  }
+
+  return (
+    <div style={{
+      color: 'var(--text-secondary)', fontSize: '12px',
+      background: 'rgba(0,0,0,0.05)', borderRadius: '4px',
+      padding: '6px 8px', marginTop: '4px', border: '1px solid var(--border)',
+      display: 'flex', flexDirection: 'column', gap: '3px',
+    }}>
+      <span>{summary.line1}</span>
+      {line2 && <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>{line2}</span>}
+    </div>
+  )
+}
 
 function dayBounds(dateStr: string) {
   const start = new Date(dateStr)
@@ -50,29 +198,6 @@ function timeSince(dateStr: string): string {
   if (sec < 3600) return `${Math.floor(sec / 60)}m ago`
   if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`
   return new Date(dateStr).toLocaleDateString()
-}
-
-function formatPayload(payload: Record<string, unknown>): string | null {
-  if (!payload || Object.keys(payload).length === 0) return null
-  
-  const parts: string[] = []
-  
-  const lat = payload.lat ?? payload.latitude
-  const lon = payload.lon ?? payload.lng ?? payload.longitude
-  if (lat !== undefined && lon !== undefined) {
-    parts.push(`📍 ${Number(lat).toFixed(5)}, ${Number(lon).toFixed(5)}`)
-  }
-  
-  if (payload.speed !== undefined) parts.push(`⚡ ${payload.speed} km/h`)
-  if (payload.battery !== undefined) parts.push(`🔋 ${payload.battery}V`)
-  if (payload.rsrp !== undefined) parts.push(`📡 ${payload.rsrp} dBm`)
-  if (payload.message !== undefined) parts.push(String(payload.message))
-  if (payload.status !== undefined) parts.push(String(payload.status))
-  if (payload.checkpoint_name !== undefined) parts.push(String(payload.checkpoint_name))
-  
-  if (parts.length > 0) return parts.join(' · ')
-  
-  return null
 }
 
 // SVG icon for event type
@@ -435,16 +560,7 @@ export default function Events() {
                       </button>
                     </div>
                   </div>
-                  {formatPayload(event.payload) && (
-                    <div style={{
-                      color: 'var(--text-secondary)', fontSize: '12px',
-                      fontFamily: "'Inter', sans-serif",
-                      background: 'rgba(0,0,0,0.05)', borderRadius: '4px',
-                      padding: '6px 8px', marginTop: '4px', border: '1px solid var(--border)'
-                    }}>
-                      {formatPayload(event.payload)}
-                    </div>
-                  )}
+                  <EventSummaryView event={event} />
                 </div>
               </div>
             )
