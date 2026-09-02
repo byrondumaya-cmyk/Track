@@ -126,7 +126,11 @@ function EventSummaryView({ event }: { event: SystemEvent }) {
     const lat = Number(latest.lat ?? 0)
     const lon = Number(latest.lon ?? 0)
     if (!lat || !lon) return
-    reverseGeocode(lat, lon).then(place => setLocationLabel(`📍 Near ${place}`))
+    reverseGeocode(lat, lon).then(res => {
+      let lbl = `📍 Near ${res.location}`
+      if (res.landmark) lbl += ` (Near: ${res.landmark})`
+      setLocationLabel(lbl)
+    })
   }, [event])
 
   if (!summary) return null

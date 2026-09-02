@@ -4,7 +4,22 @@ import 'leaflet/dist/leaflet.css'
 import { supabase } from '../lib/supabase'
 import L from 'leaflet'
 import { useRouteHistory } from '../hooks/useRouteHistory'
-import { reverseGeocode } from '../lib/geocode'
+import { reverseGeocode, type GeocodeResult } from '../lib/geocode'
+
+function HistoryDotPopup({ rec }: { rec: any }) {
+  const [geo, setGeo] = useState<GeocodeResult | null>(null)
+  useEffect(() => { reverseGeocode(rec.lat, rec.lon).then(setGeo) }, [rec.lat, rec.lon])
+  
+  return (
+    <div style={{ fontFamily: 'Inter,sans-serif', color: 'var(--text-primary)', fontSize: '12px', minWidth: '160px', lineHeight: '1.5' }}>
+      <strong>Time:</strong> {new Date(rec.timestamp).toLocaleTimeString()}<br />
+      <strong>Location:</strong> {geo?.location || 'Loading...'}<br />
+      <strong>Speed:</strong> {rec.speed_kmh?.toFixed(1) || '0'} km/h<br />
+      {geo?.landmark && <><strong>Near Trademarks:</strong> {geo.landmark}<br /></>}
+      <strong>Coordinates:</strong> {rec.lat.toFixed(6)}, {rec.lon.toFixed(6)}
+    </div>
+  )
+}
 
 // Fix leaflet default icon
 delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl
@@ -96,10 +111,10 @@ export default function LiveMap() {
   const today = new Date().toISOString().split('T')[0]
   const { route } = useRouteHistory(today, device?.device_id || '')
   
-  const [locationLabel, setLocationLabel] = useState('Loading...')
+  const [geo, setGeo] = useState<GeocodeResult | null>(null)
   useEffect(() => {
     if (device?.last_lat && device?.last_lon) {
-      reverseGeocode(device.last_lat, device.last_lon).then(setLocationLabel)
+      reverseGeocode(device.last_lat, device.last_lon).then(setGeo)
     }
   }, [device?.last_lat, device?.last_lon])
   
@@ -263,13 +278,7 @@ export default function LiveMap() {
                     pathOptions={{ color: 'var(--accent)', fillColor: 'var(--bg-card)', fillOpacity: 1, weight: 2 }} 
                   >
                     <Popup>
-                      <div style={{ fontFamily: 'Inter,sans-serif', color: 'var(--text-primary)', fontSize: '12px', minWidth: '160px' }}>
-                        <strong>{new Date(rec.timestamp).toLocaleTimeString()}</strong><br />
-                        Speed: {rec.speed_kmh?.toFixed(1) || '0'} km/h<br />
-                        <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-                          {rec.lat.toFixed(6)}, {rec.lon.toFixed(6)}
-                        </span>
-                      </div>
+                      <HistoryDotPopup rec={rec} />
                     </Popup>
                   </CircleMarker>
                 )
@@ -281,7 +290,8 @@ export default function LiveMap() {
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       {[
                         ['Speed', `${device.last_speed?.toFixed(1)} km/h`],
-                        ['Location', locationLabel],
+                        ['Location', geo?.location || 'Loading...'],
+                        ...(geo?.landmark ? [['Near Trademarks', geo.landmark]] : []),
                         ['Coordinates', `${device.last_lat.toFixed(6)}, ${device.last_lon.toFixed(6)}`],
                         ['GPS Fix', device.gps_fix ? 'Active' : 'Searching'],
                         ['Last Seen', new Date(device.last_seen).toLocaleTimeString()],

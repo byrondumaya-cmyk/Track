@@ -17,7 +17,7 @@ const makePin = (color: string, label: string) => L.divIcon({
   className: '', iconSize: [28, 28], iconAnchor: [14, 14],
 })
 
-import { reverseGeocode } from '../lib/geocode'
+import { reverseGeocode, type GeocodeResult } from '../lib/geocode'
 
 interface GpsRecord {
   id: number; lat: number; lon: number
@@ -25,19 +25,18 @@ interface GpsRecord {
 }
 
 function GeocodedPopup({ record }: { record: GpsRecord }) {
-  const [place, setPlace] = useState('Loading location...')
+  const [geo, setGeo] = useState<GeocodeResult | null>(null)
   useEffect(() => {
-    reverseGeocode(record.lat, record.lon).then(setPlace)
+    reverseGeocode(record.lat, record.lon).then(setGeo)
   }, [record.lat, record.lon])
   
   return (
-    <div style={{ fontFamily: 'Inter,sans-serif', color: 'var(--text-primary)', fontSize: '12px', minWidth: '160px' }}>
-      <strong>{new Date(record.timestamp).toLocaleTimeString()}</strong><br />
-      Speed: {record.speed_kmh?.toFixed(1) || '0'} km/h<br />
-      Location: {place}<br />
-      <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-        {record.lat.toFixed(6)}, {record.lon.toFixed(6)}
-      </span>
+    <div style={{ fontFamily: 'Inter,sans-serif', color: 'var(--text-primary)', fontSize: '12px', minWidth: '160px', lineHeight: '1.5' }}>
+      <strong>Time:</strong> {new Date(record.timestamp).toLocaleTimeString()}<br />
+      <strong>Location:</strong> {geo?.location || 'Loading...'}<br />
+      <strong>Speed:</strong> {record.speed_kmh?.toFixed(1) || '0'} km/h<br />
+      {geo?.landmark && <><strong>Near Trademarks:</strong> {geo.landmark}<br /></>}
+      <strong>Coordinates:</strong> {record.lat.toFixed(6)}, {record.lon.toFixed(6)}
     </div>
   )
 }
