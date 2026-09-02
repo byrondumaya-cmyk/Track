@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { MapContainer, TileLayer, Polyline, Marker, Popup } from 'react-leaflet'
+import { MapContainer, TileLayer, Polyline, Marker, Popup, CircleMarker } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import { supabase } from '../lib/supabase'
 import L from 'leaflet'
@@ -22,13 +22,6 @@ interface GpsRecord {
   speed_kmh: number; battery_pct: number; timestamp: string
 }
 
-interface CheckpointCompliance {
-  checkpoint_id: string
-  checkpoint_name: string
-  route_order: number | null
-  first_visit: string
-  closest_m: number
-}
 
 interface DeviceControl {
   id: string
@@ -58,8 +51,6 @@ function calcDistance(records: GpsRecord[]): number {
 
 export default function History() {
   const [date, setDate] = useState(new Date().toISOString().split('T')[0])
-  const [compliance, setCompliance] = useState<CheckpointCompliance[]>([])
-  const [totalCheckpoints, setTotalCheckpoints] = useState(0)
   const [devices, setDevices] = useState<DeviceControl[]>([])
   const [selectedDeviceId, setSelectedDeviceId] = useState('all')
   const [changingTracking, setChangingTracking] = useState(false)
@@ -104,33 +95,6 @@ export default function History() {
     fetchDevices()
   }, [])
 
-  useEffect(() => {
-    const fetchCompliance = async () => {
-      setLoadingCompliance(true)
-      
-      // Fetch Checkpoint Compliance
-      let complianceQuery = supabase.from('daily_checkpoint_compliance')
-        .select('*')
-        .eq('date_ph', date)
-        .order('route_order', { ascending: true })
-
-      if (selectedDeviceId !== 'all') {
-        complianceQuery = complianceQuery.eq('device_id', selectedDeviceId)
-      }
-
-      const { data: compData } = await complianceQuery
-      if (compData) setCompliance(compData as CheckpointCompliance[])
-
-      // Fetch Total Active Checkpoints
-      const { count } = await supabase.from('checkpoints')
-        .select('*', { count: 'exact', head: true })
-        .eq('is_active', true)
-      
-      setTotalCheckpoints(count || 0)
-      setLoadingCompliance(false)
-    }
-    fetchCompliance()
-  }, [date, selectedDeviceId, reloadKey])
 
   const activeDevice = devices.find((d) => d.id === selectedDeviceId) ?? null
 
@@ -170,34 +134,16 @@ export default function History() {
 
     setDeletingHistory(true)
 
-    let visitsDelete = supabase
-      .from('checkpoint_visits')
-      .delete()
-      .eq('device_id', activeDevice.id)
-
-    let gpsDelete = supabase
+    const gpsDelete = supabase
       .from('gps_records')
       .delete()
       .eq('device_id', activeDevice.id)
 
-    if (scope === 'day') {
-      visitsDelete = visitsDelete
-        .gte('visited_at', start.toISOString())
-        .lte('visited_at', end.toISOString())
+    const finalGpsDelete = scope === 'day'
+      ? gpsDelete.gte('timestamp', start.toISOString()).lte('timestamp', end.toISOString())
+      : gpsDelete
 
-      gpsDelete = gpsDelete
-        .gte('timestamp', start.toISOString())
-        .lte('timestamp', end.toISOString())
-    }
-
-    const { error: visitsErr } = await visitsDelete
-    if (visitsErr) {
-      alert(`Failed to delete checkpoint visits: ${visitsErr.message}`)
-      setDeletingHistory(false)
-      return
-    }
-
-    const { error: gpsErr } = await gpsDelete
+    const { error: gpsErr } = await finalGpsDelete
     if (gpsErr) {
       alert(`Failed to delete route history: ${gpsErr.message}`)
       setDeletingHistory(false)
@@ -411,22 +357,6 @@ export default function History() {
                 <div style={{ color: 'var(--text-primary)', fontSize: '18px', fontWeight: 700, letterSpacing: '-0.02em' }}>{value}</div>
               </div>
             ))}
-            
-            {/* Checkpoint Compliance Stat */}
-            <div className="anim-fade-up" style={{
-              background: 'var(--bg-card)', border: '1px solid var(--border)',
-              borderRadius: 'var(--radius-md)', padding: '12px 14px',
-              position: 'relative', overflow: 'hidden',
-            }}>
-              <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '2px', background: '#34d399' }} />
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#34d399" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-                <span style={{ color: 'var(--text-muted)', fontSize: '10px', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Checkpoints</span>
-              </div>
-              <div style={{ color: 'var(--text-primary)', fontSize: '18px', fontWeight: 700, letterSpacing: '-0.02em' }}>
-                {compliance.length} <span style={{ color: 'var(--text-muted)', fontSize: '12px', fontWeight: 500 }}>/ {totalCheckpoints}</span>
-              </div>
-            </div>
           </div>
         )}
       </div>
@@ -450,18 +380,26 @@ export default function History() {
               attribution='&copy; <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors'
             />
             {positions.length > 0 && (
-              <>
-                <Polyline
-                  positions={positions}
-                  pathOptions={{ color: '#00d4aa', weight: 3, opacity: 0.85 }}
-                />
-                <Marker position={positions[0]} icon={makePin('#3b82f6', 'A')}>
-                  <Popup><div style={{ fontFamily: 'Inter,sans-serif', color: 'var(--text-primary)', fontSize: '12px' }}><strong>Start</strong><br />{new Date(route[0].timestamp).toLocaleTimeString()}</div></Popup>
-                </Marker>
-                <Marker position={positions[positions.length - 1]} icon={makePin('#ef4444', 'B')}>
-                  <Popup><div style={{ fontFamily: 'Inter,sans-serif', color: 'var(--text-primary)', fontSize: '12px' }}><strong>End</strong><br />{new Date(route[route.length - 1].timestamp).toLocaleTimeString()}</div></Popup>
-                </Marker>
-              </>
+                <>
+                  <Polyline
+                    positions={positions}
+                    pathOptions={{ color: '#00d4aa', weight: 3, opacity: 0.85 }}
+                  />
+                  {positions.map((pos, idx) => (
+                    <CircleMarker
+                      key={idx}
+                      center={pos}
+                      radius={4}
+                      pathOptions={{ color: '#00d4aa', fillColor: 'var(--bg-card)', fillOpacity: 1, weight: 2 }}
+                    />
+                  ))}
+                  <Marker position={positions[0]} icon={makePin('#3b82f6', 'A')}>
+                    <Popup><div style={{ fontFamily: 'Inter,sans-serif', color: 'var(--text-primary)', fontSize: '12px' }}><strong>Start</strong><br />{new Date(route[0].timestamp).toLocaleTimeString()}</div></Popup>
+                  </Marker>
+                  <Marker position={positions[positions.length - 1]} icon={makePin('#ef4444', 'B')}>
+                    <Popup><div style={{ fontFamily: 'Inter,sans-serif', color: 'var(--text-primary)', fontSize: '12px' }}><strong>End</strong><br />{new Date(route[route.length - 1].timestamp).toLocaleTimeString()}</div></Popup>
+                  </Marker>
+                </>
             )}
           </MapContainer>
         )}

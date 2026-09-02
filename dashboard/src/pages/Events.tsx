@@ -85,11 +85,10 @@ function formatEventSummary(
       const line1 = `📦 ${accepted} location${accepted !== 1 ? 's' : ''} saved via ${via}  ·  ${gpsLabel}`
       if (latest) {
         const speed   = latest.speed_kmh !== undefined ? `${Number(latest.speed_kmh).toFixed(0)} km/h` : null
-        const battery = latest.battery_pct !== undefined ? `🔋 ${latest.battery_pct}%` : null
         const lat     = Number(latest.lat ?? 0)
         const lon     = Number(latest.lon ?? 0)
         const locFallback = lat && lon ? `📍 ${lat.toFixed(3)}°N, ${lon.toFixed(3)}°E` : null
-        const extras  = [speed, battery].filter(Boolean).join('  ·  ')
+        const extras  = speed ? speed : ''
         const line2   = [locFallback, extras].filter(Boolean).join('  ·  ')
         return { line1, line2: line2 || undefined }
       }
