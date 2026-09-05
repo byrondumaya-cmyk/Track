@@ -17,6 +17,8 @@ Garbage_Truck_Tracking_Progress_Report.pdf
 .gemini/
 .ag-kit-backups/
 .venv/
+gps-tracker.md
+wifi-and-offline-fix.md
 
 # ── Python ────────────────────────────────────────────────────
 __pycache__/
