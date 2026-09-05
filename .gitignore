@@ -1,1 +1,36 @@
-﻿firmware/src/secrets.h
+# ── Firmware secrets ──────────────────────────────────────────
+firmware/src/secrets.h
+
+# ── Dashboard environment & build artifacts ────────────────────
+dashboard/.env
+dashboard/node_modules/
+dashboard/dist/
+
+# ── Sensitive project documents ────────────────────────────────
+CREDENTIALS.md
+Garbage_Truck_Tracking_Progress_Report.docx
+Garbage_Truck_Tracking_Progress_Report.pdf
+~$rbage_Truck_Tracking_Progress_Report.docx
+~WRL0003.tmp
+
+# ── AI agent & internal tooling (not for clients) ──────────────
+.agents/
+.gemini/
+.ag-kit-backups/
+.venv/
+
+# ── Python ────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+
+# ── OS generated ───────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── PlatformIO build output ────────────────────────────────────
+firmware/.pio/
+
+# ── Supabase local temp ────────────────────────────────────────
+backend/supabase/.temp/
