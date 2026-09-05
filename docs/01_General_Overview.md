@@ -37,8 +37,11 @@ GarbageTrack solves all of these problems by embedding a smart GPS tracker direc
 │    A7670E (ESP32)    │                                       │ Realtime WebSocket
 │  • GNSS Antenna      │                            ┌──────────▼───────────┐
 │  • Solar Panel       │                            │  Web Dashboard       │
-│  • LiFePO4 Battery   │                            │  (Vite + React)      │
-│  • SIM Card (Smart)  │                            │  Vercel Hosted       │
+│  • 2x18650 Battery   │                            │  (Vite + React)      │
+│  • SIM Card (Smart)  │                            │                      │
+│  • TP5100 charging   │                            │                      │
+│    module            │                            │                      │
+│  • 1s2p 2A BMS       │                            │  Vercel Hosted       │
 └─────────────────────┘                            └──────────────────────┘
 ```
 
