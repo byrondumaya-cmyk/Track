@@ -7,7 +7,6 @@ dashboard/node_modules/
 dashboard/dist/
 
 # ── Sensitive project documents ────────────────────────────────
-CREDENTIALS.md
 Garbage_Truck_Tracking_Progress_Report.docx
 Garbage_Truck_Tracking_Progress_Report.pdf
 ~$rbage_Truck_Tracking_Progress_Report.docx
