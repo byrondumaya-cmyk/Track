@@ -41,7 +41,7 @@ GarbageTrack solves all of these problems by embedding a smart GPS tracker direc
 │  • SIM Card (Smart)  │                            │                      │
 │  • TP5100 charging   │                            │                      │
 │    module            │                            │                      │
-│  • 1s2p 2A BMS       │                            │  Vercel Hosted       │
+│  • 2S2A BMS          │                            │  Vercel Hosted       │
 └─────────────────────┘                            └──────────────────────┘
 ```
 
